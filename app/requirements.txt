@@ -4,3 +4,4 @@ sqlalchemy
 psycopg2-binary
 stripe
 python-dotenv
+passlib[bcrypt]
