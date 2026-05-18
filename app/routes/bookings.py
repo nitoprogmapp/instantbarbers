@@ -7,6 +7,7 @@ from app.models.booking import Booking, BookingStatus
 from app.models.barber import Barber
 from app.models.service import Service
 from app.models.user import User
+from app.models.client import Client
 
 from app.routes.auth import get_current_user
 
@@ -111,10 +112,34 @@ def get_my_bookings(
 
     expire_old_pending_bookings_for_barber(barber.id, db)
 
-    return db.query(Booking).filter(
+    bookings = db.query(Booking).filter(
         Booking.barber_id == barber.id,
         Booking.status == BookingStatus.pending
     ).all()
+
+    results = []
+
+    for booking in bookings:
+        client = db.query(Client).filter(Client.user_id == booking.client_id).first()
+
+        results.append({
+            "id": booking.id,
+            "client_id": booking.client_id,
+            "barber_id": booking.barber_id,
+            "service_id": booking.service_id,
+            "status": status_value(booking.status),
+            "created_at": booking.created_at,
+            "accepted_at": booking.accepted_at,
+            "expires_at": booking.expires_at,
+            "payment_intent_id": booking.payment_intent_id,
+            "client": {
+                "name": client.name if client else None,
+                "phone": client.phone if client else None,
+                "address": client.address if client else None
+            }
+        })
+
+    return results
 
 
 # GET BOOKING
