@@ -5,6 +5,7 @@ psycopg2-binary
 stripe
 python-dotenv
 passlib[bcrypt]
+bcrypt==4.0.1
 python-jose[cryptography]
 python-multipart
 email-validator
