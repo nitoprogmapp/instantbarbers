@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 
 from app.routes.auth import router as auth_router
 from app.routes.bookings import router as bookings_router
@@ -11,11 +13,20 @@ from app.routes.clients import router as clients_router
 from app.database import engine, Base
 from app.models import user, barber, service, booking, review
 
+
 app = FastAPI(
     title="InstantBarber API",
     version="1.0.0",
     swagger_ui_parameters={"persistAuthorization": True}
 )
+
+# Folder for temporary uploaded barber photos
+UPLOADS_DIR = Path("uploads")
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Serve uploaded files
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 
 # CORS
 app.add_middleware(
@@ -41,6 +52,7 @@ app.include_router(reviews_router)
 app.include_router(barbers_router)
 app.include_router(clients_router)
 
+
 # 🔥 FIX PROFESIONAL (startup controlado)
 @app.on_event("startup")
 def on_startup():
@@ -51,10 +63,12 @@ def on_startup():
     except Exception as e:
         print("❌ Database connection failed:", str(e))
 
+
 # Health check (clave para Render)
 @app.get("/")
 def read_root():
     return {"status": "ok", "message": "InstantBarber API is running"}
+
 
 @app.get("/health")
 def health_check():

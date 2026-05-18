@@ -1,24 +1,43 @@
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+
+
+# Load .env from project root
+BASE_DIR = Path(__file__).resolve().parent.parent
+ENV_PATH = BASE_DIR / ".env"
+load_dotenv(dotenv_path=ENV_PATH, encoding="utf-8-sig")
+
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
     raise Exception("❌ DATABASE_URL no está configurada")
 
-# 🔥 FIX para Render (PostgreSQL SSL)
+# Render sometimes provides postgres:// instead of postgresql://
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
+
+# Use SSL only when connecting to Render/PostgreSQL hosted database
+connect_args = {}
+
+if "render.com" in DATABASE_URL or "onrender.com" in DATABASE_URL:
+    connect_args = {"sslmode": "require"}
+
+
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"sslmode": "require"}  # 🔥 clave en Render
+    connect_args=connect_args
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
+
 
 def get_db():
     db = SessionLocal()
@@ -26,4 +45,3 @@ def get_db():
         yield db
     finally:
         db.close()
-        
