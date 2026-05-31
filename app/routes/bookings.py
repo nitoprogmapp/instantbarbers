@@ -72,6 +72,23 @@ def expire_old_time_limited_bookings_for_barber(barber_id: int, db: Session):
         db.commit()
 
 
+def expire_old_time_limited_bookings_for_client(client_user_id: int, db: Session):
+    now = datetime.utcnow()
+
+    old_bookings = db.query(Booking).filter(
+        Booking.client_id == client_user_id,
+        Booking.status.in_(TIME_LIMITED_BOOKING_STATUSES),
+        Booking.expires_at != None,
+        Booking.expires_at < now
+    ).all()
+
+    for booking in old_bookings:
+        booking.status = BookingStatus.expired
+
+    if old_bookings:
+        db.commit()
+
+
 def expire_old_time_limited_booking(booking: Booking, db: Session):
     if not booking:
         return
@@ -95,6 +112,15 @@ def get_active_booking_for_barber(barber_id: int, db: Session):
         Booking.barber_id == barber_id,
         Booking.status.in_(ACTIVE_BOOKING_STATUSES)
     ).order_by(Booking.created_at.asc()).first()
+
+
+def get_active_booking_for_client(client_user_id: int, db: Session):
+    expire_old_time_limited_bookings_for_client(client_user_id, db)
+
+    return db.query(Booking).filter(
+        Booking.client_id == client_user_id,
+        Booking.status.in_(ACTIVE_BOOKING_STATUSES)
+    ).order_by(Booking.created_at.desc()).first()
 
 
 def booking_to_barber_response(booking: Booking, db: Session):
@@ -190,6 +216,24 @@ def get_my_bookings(
         return []
 
     return [booking_to_barber_response(active_booking, db)]
+
+
+# CLIENT ACTIVE BOOKING (CLIENTE LOGUEADO)
+# IMPORTANTE: Este endpoint debe estar antes de /{booking_id}
+@router.get("/client/me/active")
+def get_my_active_client_booking(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if role_value(current_user.role) != "client":
+        raise HTTPException(status_code=403, detail="Only clients can view their active booking")
+
+    active_booking = get_active_booking_for_client(current_user.id, db)
+
+    if not active_booking:
+        raise HTTPException(status_code=404, detail="No active booking found")
+
+    return active_booking
 
 
 # GET BOOKING
