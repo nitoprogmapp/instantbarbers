@@ -1,11 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Request
 from sqlalchemy.orm import Session
 from pathlib import Path
+from datetime import datetime
 import uuid
 
 from app.database import get_db
 from app.models.barber import Barber
 from app.models.user import User
+from app.models.booking import Booking, BookingStatus
 from app.routes.auth import get_current_user
 from app.schemas.barber import BarberProfileRead, BarberProfileUpdate
 
@@ -24,12 +26,39 @@ ALLOWED_IMAGE_TYPES = {
     "image/webp": ".webp",
 }
 
+ACTIVE_BOOKING_STATUSES = [
+    BookingStatus.pending,
+    BookingStatus.accepted,
+    BookingStatus.paid,
+]
+
+TIME_LIMITED_BOOKING_STATUSES = [
+    BookingStatus.pending,
+    BookingStatus.accepted,
+]
+
 
 def ensure_user_is_barber(current_user: User):
     role = current_user.role.value if hasattr(current_user.role, "value") else current_user.role
 
     if role != "barber":
         raise HTTPException(status_code=403, detail="User is not a barber")
+
+
+def expire_old_time_limited_bookings(db: Session):
+    now = datetime.utcnow()
+
+    old_bookings = db.query(Booking).filter(
+        Booking.status.in_(TIME_LIMITED_BOOKING_STATUSES),
+        Booking.expires_at != None,
+        Booking.expires_at < now
+    ).all()
+
+    for booking in old_bookings:
+        booking.status = BookingStatus.expired
+
+    if old_bookings:
+        db.commit()
 
 
 def get_or_create_barber_profile(db: Session, current_user: User) -> Barber:
@@ -70,15 +99,32 @@ def get_barbers(db: Session = Depends(get_db)):
 
 @router.get("/available")
 def get_available_barbers(db: Session = Depends(get_db)):
-    barbers = (
+    expire_old_time_limited_bookings(db)
+
+    occupied_barber_ids = [
+        row[0]
+        for row in db.query(Booking.barber_id)
+        .filter(
+            Booking.status.in_(ACTIVE_BOOKING_STATUSES),
+            Booking.barber_id.isnot(None)
+        )
+        .distinct()
+        .all()
+    ]
+
+    query = (
         db.query(Barber)
         .filter(
             Barber.active.is_(True),
             Barber.user_id.isnot(None),
             Barber.price.isnot(None)
         )
-        .all()
     )
+
+    if occupied_barber_ids:
+        query = query.filter(Barber.id.notin_(occupied_barber_ids))
+
+    barbers = query.all()
 
     return barbers
 
