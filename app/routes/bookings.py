@@ -15,6 +15,18 @@ from app.routes.auth import get_current_user
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
 
 
+ACTIVE_BOOKING_STATUSES = [
+    BookingStatus.pending,
+    BookingStatus.accepted,
+    BookingStatus.paid,
+]
+
+TIME_LIMITED_BOOKING_STATUSES = [
+    BookingStatus.pending,
+    BookingStatus.accepted,
+]
+
+
 def get_db():
     db = SessionLocal()
     try:
@@ -43,21 +55,67 @@ def mark_booking_expired_safely(booking: Booking, db: Session):
         db.rollback()
 
 
-def expire_old_pending_bookings_for_barber(barber_id: int, db: Session):
+def expire_old_time_limited_bookings_for_barber(barber_id: int, db: Session):
     now = datetime.utcnow()
 
-    old_pending_bookings = db.query(Booking).filter(
+    old_bookings = db.query(Booking).filter(
         Booking.barber_id == barber_id,
-        Booking.status == BookingStatus.pending,
+        Booking.status.in_(TIME_LIMITED_BOOKING_STATUSES),
         Booking.expires_at != None,
         Booking.expires_at < now
     ).all()
 
-    for booking in old_pending_bookings:
+    for booking in old_bookings:
         booking.status = BookingStatus.expired
 
-    if old_pending_bookings:
+    if old_bookings:
         db.commit()
+
+
+def expire_old_time_limited_booking(booking: Booking, db: Session):
+    if not booking:
+        return
+
+    if status_value(booking.status) not in ["pending", "accepted"]:
+        return
+
+    if not booking.expires_at:
+        return
+
+    now = datetime.utcnow()
+
+    if now > booking.expires_at:
+        mark_booking_expired_safely(booking, db)
+
+
+def get_active_booking_for_barber(barber_id: int, db: Session):
+    expire_old_time_limited_bookings_for_barber(barber_id, db)
+
+    return db.query(Booking).filter(
+        Booking.barber_id == barber_id,
+        Booking.status.in_(ACTIVE_BOOKING_STATUSES)
+    ).order_by(Booking.created_at.asc()).first()
+
+
+def booking_to_barber_response(booking: Booking, db: Session):
+    client = db.query(Client).filter(Client.user_id == booking.client_id).first()
+
+    return {
+        "id": booking.id,
+        "client_id": booking.client_id,
+        "barber_id": booking.barber_id,
+        "service_id": booking.service_id,
+        "status": status_value(booking.status),
+        "created_at": booking.created_at,
+        "accepted_at": booking.accepted_at,
+        "expires_at": booking.expires_at,
+        "payment_intent_id": booking.payment_intent_id,
+        "client": {
+            "name": client.name if client else None,
+            "phone": client.phone if client else None,
+            "address": client.address if client else None
+        }
+    }
 
 
 # CREATE BOOKING (CLIENTE LOGUEADO)
@@ -72,12 +130,28 @@ def create_booking(
         raise HTTPException(status_code=403, detail="Only clients can create bookings")
 
     barber = db.query(Barber).filter(Barber.id == barber_id).first()
+
     if not barber:
         raise HTTPException(status_code=404, detail="Barber not found")
 
+    if barber.active is not True:
+        raise HTTPException(
+            status_code=409,
+            detail="This barber is not available right now. Please choose another barber."
+        )
+
     service = db.query(Service).filter(Service.id == service_id).first()
+
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
+
+    active_booking = get_active_booking_for_barber(barber_id, db)
+
+    if active_booking:
+        raise HTTPException(
+            status_code=409,
+            detail="This barber is no longer available. Please choose another barber."
+        )
 
     now = datetime.utcnow()
 
@@ -110,36 +184,12 @@ def get_my_bookings(
     if not barber:
         raise HTTPException(status_code=404, detail="Barber profile not found")
 
-    expire_old_pending_bookings_for_barber(barber.id, db)
+    active_booking = get_active_booking_for_barber(barber.id, db)
 
-    bookings = db.query(Booking).filter(
-        Booking.barber_id == barber.id,
-        Booking.status == BookingStatus.pending
-    ).all()
+    if not active_booking:
+        return []
 
-    results = []
-
-    for booking in bookings:
-        client = db.query(Client).filter(Client.user_id == booking.client_id).first()
-
-        results.append({
-            "id": booking.id,
-            "client_id": booking.client_id,
-            "barber_id": booking.barber_id,
-            "service_id": booking.service_id,
-            "status": status_value(booking.status),
-            "created_at": booking.created_at,
-            "accepted_at": booking.accepted_at,
-            "expires_at": booking.expires_at,
-            "payment_intent_id": booking.payment_intent_id,
-            "client": {
-                "name": client.name if client else None,
-                "phone": client.phone if client else None,
-                "address": client.address if client else None
-            }
-        })
-
-    return results
+    return [booking_to_barber_response(active_booking, db)]
 
 
 # GET BOOKING
@@ -150,11 +200,7 @@ def get_booking(booking_id: int, db: Session = Depends(get_db)):
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
 
-    if status_value(booking.status) == "pending" and booking.expires_at:
-        now = datetime.utcnow()
-
-        if now > booking.expires_at:
-            mark_booking_expired_safely(booking, db)
+    expire_old_time_limited_booking(booking, db)
 
     return booking
 
@@ -174,6 +220,8 @@ def accept_booking(
     if not barber:
         raise HTTPException(status_code=404, detail="Barber profile not found")
 
+    expire_old_time_limited_bookings_for_barber(barber.id, db)
+
     booking = db.query(Booking).filter(Booking.id == booking_id).first()
 
     if not booking:
@@ -190,6 +238,18 @@ def accept_booking(
     if booking.expires_at and now > booking.expires_at:
         mark_booking_expired_safely(booking, db)
         raise HTTPException(status_code=400, detail="Booking expired because barber did not accept in time")
+
+    other_active_booking = db.query(Booking).filter(
+        Booking.barber_id == barber.id,
+        Booking.id != booking.id,
+        Booking.status.in_(ACTIVE_BOOKING_STATUSES)
+    ).first()
+
+    if other_active_booking:
+        raise HTTPException(
+            status_code=409,
+            detail="You already have an active booking."
+        )
 
     booking.status = BookingStatus.accepted
     booking.accepted_at = now
