@@ -22,25 +22,44 @@ if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 
-# Use SSL only when connecting to Render/PostgreSQL hosted database
+# Detect local database
+is_local_db = (
+    "localhost" in DATABASE_URL
+    or "127.0.0.1" in DATABASE_URL
+)
+
+# Production PostgreSQL protection
 connect_args = {}
 
-if "render.com" in DATABASE_URL or "onrender.com" in DATABASE_URL:
-    connect_args = {"sslmode": "require"}
+if not is_local_db:
+    connect_args = {
+        "sslmode": "require",
+        "connect_timeout": 10,
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 5,
+    }
 
 
 engine = create_engine(
     DATABASE_URL,
     connect_args=connect_args,
 
-    # Permanent production protection:
-    # Checks if a database connection is alive before using it.
-    # If the old connection is dead, SQLAlchemy discards it and opens a fresh one.
+    # Checks connection before using it.
+    # If the connection is dead, SQLAlchemy discards it and opens a new one.
     pool_pre_ping=True,
 
-    # Recycles database connections every 5 minutes.
-    # This helps avoid stale SSL/PostgreSQL connections on Render.
-    pool_recycle=300,
+    # Recycles connections every 3 minutes to avoid stale PostgreSQL/SSL connections.
+    pool_recycle=180,
+
+    # Keeps pool controlled and stable for production.
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30,
+
+    # Prefer newer SQLAlchemy engine behavior.
+    future=True,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -54,4 +73,3 @@ def get_db():
         yield db
     finally:
         db.close()
-        
