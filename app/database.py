@@ -31,7 +31,16 @@ if "render.com" in DATABASE_URL or "onrender.com" in DATABASE_URL:
 
 engine = create_engine(
     DATABASE_URL,
-    connect_args=connect_args
+    connect_args=connect_args,
+
+    # Permanent production protection:
+    # Checks if a database connection is alive before using it.
+    # If the old connection is dead, SQLAlchemy discards it and opens a fresh one.
+    pool_pre_ping=True,
+
+    # Recycles database connections every 5 minutes.
+    # This helps avoid stale SSL/PostgreSQL connections on Render.
+    pool_recycle=300,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -45,3 +54,4 @@ def get_db():
         yield db
     finally:
         db.close()
+        
