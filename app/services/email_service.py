@@ -70,3 +70,75 @@ If you did not create this account, you can ignore this email.
             smtp.starttls()
             smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
             smtp.send_message(message)
+
+
+def send_password_reset_email(to_email: str, reset_link: str) -> None:
+    if not SMTP_USERNAME or not SMTP_PASSWORD or not EMAIL_FROM:
+        raise RuntimeError("SMTP variables are not configured")
+
+    message = EmailMessage()
+    message["Subject"] = "Reset your InstantBarbers password"
+    message["From"] = f"InstantBarbers <{EMAIL_FROM}>"
+    message["To"] = to_email
+
+    message.set_content(
+        f"""
+InstantBarbers password reset
+
+We received a request to reset your password.
+
+Open this link to create a new password:
+
+{reset_link}
+
+This link will expire for your security.
+
+If you did not request a password reset, you can ignore this email.
+"""
+    )
+
+    message.add_alternative(
+        f"""
+        <html>
+            <body style="font-family: Arial, sans-serif;">
+                <h2>Reset your InstantBarbers password</h2>
+
+                <p>We received a request to reset your password.</p>
+
+                <p>Click the button below to create a new password.</p>
+
+                <p>
+                    <a href="{reset_link}"
+                       style="
+                           display: inline-block;
+                           padding: 12px 20px;
+                           background-color: #111827;
+                           color: white;
+                           text-decoration: none;
+                           border-radius: 6px;
+                       ">
+                        Reset my password
+                    </a>
+                </p>
+
+                <p>This link will expire for your security.</p>
+
+                <p>
+                    If you did not request a password reset,
+                    you can ignore this email.
+                </p>
+            </body>
+        </html>
+        """,
+        subtype="html",
+    )
+
+    if SMTP_USE_SSL:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
+            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.send_message(message)
+    else:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
+            smtp.starttls()
+            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.send_message(message)

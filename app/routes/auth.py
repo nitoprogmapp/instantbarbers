@@ -10,14 +10,23 @@ from app.database import get_db
 from app.models.user import User, UserRole
 from app.models.client import Client
 from app.models.barber import Barber
-from app.schemas.auth import RegisterRequest, LoginRequest
-from app.services.email_service import send_verification_email
+from app.schemas.auth import (
+    RegisterRequest,
+    LoginRequest,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+)
+from app.services.email_service import (
+    send_verification_email,
+    send_password_reset_email,
+)
 
 
 SECRET_KEY = "secret"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 EMAIL_VERIFICATION_EXPIRE_HOURS = 24
+PASSWORD_RESET_EXPIRE_MINUTES = 30
 FRONTEND_URL = "https://instantbarbers.com"
 
 
@@ -69,6 +78,24 @@ def create_email_verification_token(user_id: int):
     payload = {
         "user_id": user_id,
         "purpose": "email_verification",
+        "exp": expire
+    }
+
+    return jwt.encode(
+        payload,
+        SECRET_KEY,
+        algorithm=ALGORITHM
+    )
+
+
+def create_password_reset_token(user_id: int):
+    expire = datetime.utcnow() + timedelta(
+        minutes=PASSWORD_RESET_EXPIRE_MINUTES
+    )
+
+    payload = {
+        "user_id": user_id,
+        "purpose": "password_reset",
         "exp": expire
     }
 
@@ -286,6 +313,115 @@ def verify_email(
         "user_id": user.id,
         "role": user.role.value,
         "email_verified": True
+    }
+
+
+@router.post("/forgot-password")
+def forgot_password(
+    data: ForgotPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    email = str(data.email).lower().strip()
+
+    user = (
+        db.query(User)
+        .filter(User.email == email)
+        .first()
+    )
+
+    if user:
+        reset_token = create_password_reset_token(
+            user.id
+        )
+
+        reset_link = (
+            f"{FRONTEND_URL}/reset-password"
+            f"?token={reset_token}"
+        )
+
+        try:
+            send_password_reset_email(
+                to_email=user.email,
+                reset_link=reset_link
+            )
+
+        except Exception as error:
+            print(
+                "PASSWORD RESET EMAIL ERROR:",
+                repr(error)
+            )
+
+            raise HTTPException(
+                status_code=500,
+                detail="The password reset email could not be sent"
+            )
+
+    return {
+        "message": (
+            "If an account exists with this email, "
+            "a password reset link has been sent."
+        )
+    }
+
+
+@router.post("/reset-password")
+def reset_password(
+    data: ResetPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    try:
+        payload = jwt.decode(
+            data.token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
+
+        user_id = payload.get("user_id")
+        purpose = payload.get("purpose")
+
+        if user_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid password reset link"
+            )
+
+        if purpose != "password_reset":
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid password reset link"
+            )
+
+        user_id = int(user_id)
+
+    except HTTPException:
+        raise
+
+    except (JWTError, ValueError, TypeError):
+        raise HTTPException(
+            status_code=400,
+            detail="The password reset link is invalid or has expired"
+        )
+
+    user = (
+        db.query(User)
+        .filter(User.id == user_id)
+        .first()
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    user.password_hash = hash_password(
+        data.new_password
+    )
+
+    db.commit()
+
+    return {
+        "message": "Password reset successfully"
     }
 
 
