@@ -334,9 +334,12 @@ def forgot_password(
             user.id
         )
 
+        account_role = user.role.value
+
         reset_link = (
             f"{FRONTEND_URL}/reset-password"
             f"?token={reset_token}"
+            f"&role={account_role}"
         )
 
         try:
