@@ -339,6 +339,48 @@ def refuse_booking(
     return booking
 
 
+# CANCEL BOOKING BEFORE PAYMENT (CLIENTE LOGUEADO)
+@router.put("/{booking_id}/cancel")
+def cancel_booking(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if role_value(current_user.role) != "client":
+        raise HTTPException(
+            status_code=403,
+            detail="Only clients can cancel bookings"
+        )
+
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    if booking.client_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not your booking")
+
+    if status_value(booking.status) != "accepted":
+        raise HTTPException(
+            status_code=400,
+            detail="Only accepted bookings can be cancelled before payment"
+        )
+
+    if booking.expires_at:
+        now = datetime.utcnow()
+
+        if now > booking.expires_at:
+            mark_booking_expired_safely(booking, db)
+            raise HTTPException(status_code=400, detail="Booking expired")
+
+    booking.status = BookingStatus.cancelled
+
+    db.commit()
+    db.refresh(booking)
+
+    return booking
+
+
 # PAY BOOKING (CLIENTE LOGUEADO)
 @router.put("/{booking_id}/paid")
 def pay_booking(
