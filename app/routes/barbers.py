@@ -10,6 +10,11 @@ from app.models.user import User
 from app.models.booking import Booking, BookingStatus
 from app.routes.auth import get_current_user
 from app.schemas.barber import BarberProfileRead, BarberProfileUpdate
+from app.services.geocoding_service import (
+    AddressNotFoundError,
+    GeocodingServiceError,
+    geocode_address,
+)
 
 
 router = APIRouter(
@@ -155,6 +160,50 @@ def update_my_barber_profile(
     barber = get_or_create_barber_profile(db, current_user)
 
     update_data = profile_data.model_dump(exclude_unset=True)
+
+    if "address" in update_data:
+        submitted_address = update_data["address"]
+        clean_address = submitted_address.strip() if submitted_address else ""
+        current_address = (barber.address or "").strip()
+
+        if clean_address:
+            update_data["address"] = clean_address
+
+            coordinates_are_missing = (
+                barber.latitude is None
+                or barber.longitude is None
+            )
+
+            if clean_address != current_address or coordinates_are_missing:
+                try:
+                    latitude, longitude = geocode_address(clean_address)
+
+                except AddressNotFoundError as exc:
+                    db.rollback()
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Address could not be located. "
+                            "Please enter a complete address."
+                        )
+                    ) from exc
+
+                except GeocodingServiceError as exc:
+                    db.rollback()
+                    raise HTTPException(
+                        status_code=503,
+                        detail=(
+                            "Location service is temporarily unavailable."
+                        )
+                    ) from exc
+
+                barber.latitude = latitude
+                barber.longitude = longitude
+
+        else:
+            update_data["address"] = None
+            barber.latitude = None
+            barber.longitude = None
 
     for field, value in update_data.items():
         if hasattr(barber, field):
