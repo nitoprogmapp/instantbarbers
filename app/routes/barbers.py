@@ -110,6 +110,7 @@ def get_barbers(db: Session = Depends(get_db)):
 def get_available_barbers(
     client_latitude: float | None = None,
     client_longitude: float | None = None,
+    excluded_barber_ids: str | None = None,
     db: Session = Depends(get_db)
 ):
     expire_old_time_limited_bookings(db)
@@ -125,6 +126,18 @@ def get_available_barbers(
         .all()
     ]
 
+    excluded_ids = []
+
+    if excluded_barber_ids:
+        for raw_id in excluded_barber_ids.split(","):
+            try:
+                barber_id = int(raw_id.strip())
+            except (TypeError, ValueError):
+                continue
+
+            if barber_id > 0:
+                excluded_ids.append(barber_id)
+
     query = (
         db.query(Barber)
         .filter(
@@ -137,6 +150,11 @@ def get_available_barbers(
     if occupied_barber_ids:
         query = query.filter(
             Barber.id.notin_(occupied_barber_ids)
+        )
+
+    if excluded_ids:
+        query = query.filter(
+            Barber.id.notin_(excluded_ids)
         )
 
     barbers = query.all()
