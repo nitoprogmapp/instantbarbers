@@ -15,6 +15,10 @@ from app.services.geocoding_service import (
     GeocodingServiceError,
     geocode_address,
 )
+from app.services.routes_service import (
+    RoutesServiceError,
+    calculate_walking_routes,
+)
 
 
 router = APIRouter(
@@ -103,7 +107,11 @@ def get_barbers(db: Session = Depends(get_db)):
 
 
 @router.get("/available")
-def get_available_barbers(db: Session = Depends(get_db)):
+def get_available_barbers(
+    client_latitude: float | None = None,
+    client_longitude: float | None = None,
+    db: Session = Depends(get_db)
+):
     expire_old_time_limited_bookings(db)
 
     occupied_barber_ids = [
@@ -127,11 +135,81 @@ def get_available_barbers(db: Session = Depends(get_db)):
     )
 
     if occupied_barber_ids:
-        query = query.filter(Barber.id.notin_(occupied_barber_ids))
+        query = query.filter(
+            Barber.id.notin_(occupied_barber_ids)
+        )
 
     barbers = query.all()
 
-    return barbers
+    if client_latitude is None and client_longitude is None:
+        return barbers
+
+    if client_latitude is None or client_longitude is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Both client_latitude and client_longitude "
+                "are required."
+            )
+        )
+
+    if not -90 <= client_latitude <= 90:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid client latitude."
+        )
+
+    if not -180 <= client_longitude <= 180:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid client longitude."
+        )
+
+    barber_locations = [
+        {
+            "barber_id": barber.id,
+            "latitude": barber.latitude,
+            "longitude": barber.longitude,
+        }
+        for barber in barbers
+        if barber.latitude is not None
+        and barber.longitude is not None
+    ]
+
+    try:
+        walking_routes = calculate_walking_routes(
+            client_latitude=client_latitude,
+            client_longitude=client_longitude,
+            barbers=barber_locations,
+        )
+
+    except RoutesServiceError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Walking route service is temporarily unavailable."
+        ) from exc
+
+    barbers_by_id = {
+        barber.id: barber
+        for barber in barbers
+    }
+
+    nearest_barbers = []
+
+    for route in walking_routes[:3]:
+        barber = barbers_by_id.get(route["barber_id"])
+
+        if barber is None:
+            continue
+
+        barber.distance_meters = route["distance_meters"]
+        barber.distance_km = route["distance_km"]
+        barber.duration_seconds = route["duration_seconds"]
+        barber.walking_minutes = route["walking_minutes"]
+
+        nearest_barbers.append(barber)
+
+    return nearest_barbers
 
 
 @router.get("/me", response_model=BarberProfileRead)
