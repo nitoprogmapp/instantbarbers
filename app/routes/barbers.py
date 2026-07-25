@@ -87,6 +87,40 @@ def get_or_create_barber_profile(db: Session, current_user: User) -> Barber:
     return barber
 
 
+def build_available_barber_response(
+    barber: Barber,
+    route: dict | None = None
+):
+    return {
+        "id": barber.id,
+        "name": barber.name,
+        "shop_name": barber.shop_name,
+        "photo_url": barber.photo_url,
+        "price": barber.price,
+        "active": barber.active,
+        "distance_meters": (
+            route["distance_meters"]
+            if route
+            else None
+        ),
+        "distance_km": (
+            route["distance_km"]
+            if route
+            else None
+        ),
+        "duration_seconds": (
+            route["duration_seconds"]
+            if route
+            else None
+        ),
+        "walking_minutes": (
+            route["walking_minutes"]
+            if route
+            else None
+        ),
+    }
+
+
 @router.post("/")
 def create_barber(
     name: str,
@@ -160,7 +194,10 @@ def get_available_barbers(
     barbers = query.all()
 
     if client_latitude is None and client_longitude is None:
-        return barbers
+        return [
+            build_available_barber_response(barber)
+            for barber in barbers
+        ]
 
     if client_latitude is None or client_longitude is None:
         raise HTTPException(
@@ -220,12 +257,12 @@ def get_available_barbers(
         if barber is None:
             continue
 
-        barber.distance_meters = route["distance_meters"]
-        barber.distance_km = route["distance_km"]
-        barber.duration_seconds = route["duration_seconds"]
-        barber.walking_minutes = route["walking_minutes"]
-
-        nearest_barbers.append(barber)
+        nearest_barbers.append(
+            build_available_barber_response(
+                barber=barber,
+                route=route,
+            )
+        )
 
     return nearest_barbers
 
