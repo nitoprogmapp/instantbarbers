@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Request
 from sqlalchemy.orm import Session
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 
 from app.database import get_db
@@ -46,6 +46,9 @@ TIME_LIMITED_BOOKING_STATUSES = [
     BookingStatus.accepted,
 ]
 
+# A barber disappears from customer results when heartbeats stop.
+BARBER_ONLINE_TIMEOUT_SECONDS = 90
+
 
 def ensure_user_is_barber(current_user: User):
     role = current_user.role.value if hasattr(current_user.role, "value") else current_user.role
@@ -77,7 +80,8 @@ def get_or_create_barber_profile(db: Session, current_user: User) -> Barber:
         barber = Barber(
             user_id=current_user.id,
             name=current_user.email,
-            active=True
+            active=False,
+            last_seen_at=None,
         )
 
         db.add(barber)
@@ -124,7 +128,7 @@ def build_available_barber_response(
 @router.post("/")
 def create_barber(
     name: str,
-    active: bool = True,
+    active: bool = False,
     db: Session = Depends(get_db)
 ):
     barber = Barber(name=name, active=active)
@@ -148,6 +152,11 @@ def get_available_barbers(
     db: Session = Depends(get_db)
 ):
     expire_old_time_limited_bookings(db)
+
+    online_cutoff = (
+        datetime.utcnow()
+        - timedelta(seconds=BARBER_ONLINE_TIMEOUT_SECONDS)
+    )
 
     occupied_barber_ids = [
         row[0]
@@ -176,6 +185,8 @@ def get_available_barbers(
         db.query(Barber)
         .filter(
             Barber.active.is_(True),
+            Barber.last_seen_at.isnot(None),
+            Barber.last_seen_at >= online_cutoff,
             Barber.user_id.isnot(None),
             Barber.price.isnot(None)
         )
@@ -267,6 +278,37 @@ def get_available_barbers(
     return nearest_barbers
 
 
+@router.put("/me/heartbeat")
+def update_my_barber_heartbeat(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    ensure_user_is_barber(current_user)
+
+    barber = db.query(Barber).filter(
+        Barber.user_id == current_user.id
+    ).first()
+
+    if not barber:
+        raise HTTPException(
+            status_code=404,
+            detail="Barber profile not found"
+        )
+
+    if not barber.active:
+        return {
+            "active": False,
+        }
+
+    barber.last_seen_at = datetime.utcnow()
+
+    db.commit()
+
+    return {
+        "active": True,
+    }
+
+
 @router.get("/me", response_model=BarberProfileRead)
 def get_my_barber_profile(
     db: Session = Depends(get_db),
@@ -337,6 +379,13 @@ def update_my_barber_profile(
             update_data["address"] = None
             barber.latitude = None
             barber.longitude = None
+
+    if "active" in update_data:
+        barber.last_seen_at = (
+            datetime.utcnow()
+            if update_data["active"]
+            else None
+        )
 
     for field, value in update_data.items():
         if hasattr(barber, field):

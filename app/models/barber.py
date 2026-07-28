@@ -1,5 +1,14 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Float
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Boolean,
+    ForeignKey,
+    Float,
+    DateTime,
+)
 from sqlalchemy.orm import relationship
+
 from app.database import Base
 
 
@@ -17,9 +26,26 @@ class Barber(Base):
 
     photo_url = Column(String, nullable=True)
     price = Column(Integer, nullable=True)
-    active = Column(Boolean, default=True)
+
+    active = Column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    last_seen_at = Column(
+        DateTime,
+        nullable=True,
+    )
 
     stripe_account_id = Column(String, nullable=True)
 
-    user_id = Column(Integer, ForeignKey("users.id"))
-    user = relationship("User", back_populates="barber")
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+    )
+
+    user = relationship(
+        "User",
+        back_populates="barber",
+    )
