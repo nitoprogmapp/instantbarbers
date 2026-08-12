@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 
@@ -41,6 +41,22 @@ def role_value(role):
 
 def status_value(status):
     return status.value if hasattr(status, "value") else status
+
+
+def normalize_canadian_phone(phone):
+    digits = "".join(
+        character
+        for character in str(phone or "")
+        if character.isdigit()
+    )
+
+    if len(digits) == 10:
+        return f"+1{digits}"
+
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+{digits}"
+
+    return None
 
 
 def mark_booking_expired_safely(booking: Booking, db: Session):
@@ -708,6 +724,7 @@ def complete_booking(
 @router.get("/{booking_id}/destination")
 def get_paid_booking_destination(
     booking_id: int,
+    response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(
         get_current_user
@@ -777,11 +794,27 @@ def get_paid_booking_destination(
             )
         )
 
+    barber_phone = normalize_canadian_phone(
+        barber.phone
+    )
+
+    response.headers["Cache-Control"] = (
+        "private, no-store, no-cache, "
+        "must-revalidate, max-age=0"
+    )
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    response.headers["Vary"] = "Authorization"
+
     return {
         "booking_id": booking.id,
         "barber_id": barber.id,
         "barber_name": barber.name,
         "shop_name": barber.shop_name,
+        "phone": barber_phone,
+        "phone_available": bool(
+            barber_phone
+        ),
         "address": barber.address,
         "latitude": barber.latitude,
         "longitude": barber.longitude,
