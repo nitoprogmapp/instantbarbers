@@ -1,7 +1,13 @@
+import os
+
 import stripe
 
-# 🔐 CLAVE TEMPORAL (NO REAL)
-stripe.api_key = "sk_test_TEMPORAL"
+
+# Clave secreta configurada en las variables de entorno de Render.
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+
+if not stripe.api_key:
+    raise ValueError("STRIPE_SECRET_KEY no está configurada.")
 
 
 def create_payment_intent(amount, currency, barber_stripe_account, app_fee):
@@ -10,9 +16,7 @@ def create_payment_intent(amount, currency, barber_stripe_account, app_fee):
         amount=int(amount * 100),
         currency=currency,
         payment_method_types=["card"],
-
         application_fee_amount=app_fee,
-
         transfer_data={
             "destination": barber_stripe_account
         }
