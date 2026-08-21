@@ -1,25 +1,45 @@
 from fastapi import APIRouter, Depends
+
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+
 from app.models.client import Client
+
 from app.schemas.client import ClientCreate, ClientResponse
+
 
 router = APIRouter(
     prefix="/clients",
     tags=["Clients"]
 )
 
+
 @router.post("/", response_model=ClientResponse)
 def create_client(client: ClientCreate, db: Session = Depends(get_db)):
     new_client = Client(name=client.name)
+
     db.add(new_client)
     db.commit()
     db.refresh(new_client)
+
     return new_client
+
+
+@router.get("/count")
+def get_registered_clients_count(db: Session = Depends(get_db)):
+    registered_customers = db.query(Client).count()
+
+    return {
+        "registered_customers": registered_customers,
+        "customer_goal": 1000,
+        "remaining_spots": max(1000 - registered_customers, 0),
+        "goal_reached": registered_customers >= 1000
+    }
 
 
 @router.get("/", response_model=list[ClientResponse])
 def get_clients(db: Session = Depends(get_db)):
     clients = db.query(Client).all()
+
     return clients
