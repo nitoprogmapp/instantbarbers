@@ -54,7 +54,7 @@ def pay(booking_id: int):
             raise HTTPException(status_code=400, detail="Barber has no price")
 
         # 💰 CALCULAR 3%
-        app_fee = int(barber.price * 0.03)
+        app_fee = int(round(barber.price * 100 * 0.03))
 
         # 💳 CREAR PAYMENT INTENT
         intent = create_payment_intent(
