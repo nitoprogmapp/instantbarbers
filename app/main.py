@@ -38,6 +38,7 @@ app.add_middleware(
         "http://127.0.0.1:3001",
         "https://instantbarbers.com",
         "https://www.instantbarbers.com",
+        "https://ec257e2f-ca81-45a9-aedc-c16de05edb86.app-preview.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],
