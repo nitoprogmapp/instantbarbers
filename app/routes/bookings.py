@@ -487,7 +487,7 @@ def accept_booking(
     booking.status = BookingStatus.accepted
     booking.accepted_at = now
     booking.expires_at = now + timedelta(
-        seconds=30
+        seconds=90
     )
 
     db.commit()
