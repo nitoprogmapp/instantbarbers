@@ -459,10 +459,13 @@ def connect_my_stripe_account(
                 country="CA",
                 email=current_user.email,
                 capabilities={
-                    "card_payments": {
-                        "requested": True
-                    }
-                },
+    "card_payments": {
+        "requested": True
+    },
+    "transfers": {
+        "requested": True
+    }
+},
                 controller={
                     "fees": {
                         "payer": "account"
