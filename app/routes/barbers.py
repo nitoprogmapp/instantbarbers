@@ -442,3 +442,60 @@ async def upload_my_barber_photo(
     db.refresh(barber)
 
     return barber
+@router.post("/me/stripe/connect")
+def connect_my_stripe_account(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.services.stripe_service import stripe
+
+    ensure_user_is_barber(current_user)
+
+    barber = get_or_create_barber_profile(db, current_user)
+
+    try:
+        if not barber.stripe_account_id:
+            stripe_account = stripe.Account.create(
+                country="CA",
+                email=current_user.email,
+                capabilities={
+                    "card_payments": {
+                        "requested": True
+                    }
+                },
+                controller={
+                    "fees": {
+                        "payer": "account"
+                    },
+                    "losses": {
+                        "payments": "stripe"
+                    },
+                    "stripe_dashboard": {
+                        "type": "express"
+                    }
+                }
+            )
+
+            barber.stripe_account_id = stripe_account.id
+
+            db.commit()
+            db.refresh(barber)
+
+        account_link = stripe.AccountLink.create(
+            account=barber.stripe_account_id,
+            refresh_url="https://instantbarbers.com/?stripe=retry",
+            return_url="https://instantbarbers.com/?stripe=connected",
+            type="account_onboarding"
+        )
+
+        return {
+            "onboarding_url": account_link.url
+        }
+
+    except Exception as e:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
