@@ -54,8 +54,13 @@ async def expire_unpaid_checkout(
             Booking.id == booking_id
         ).first()
 
-        if not booking or booking.status == BookingStatus.paid:
-            return
+        if not booking or booking.status in (
+    BookingStatus.paid,
+    BookingStatus.completed,
+    BookingStatus.cancelled,
+    BookingStatus.expired,
+):
+    return
 
         session = await run_in_threadpool(
             stripe.checkout.Session.retrieve,
