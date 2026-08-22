@@ -306,7 +306,7 @@ async def return_from_stripe(
             stripe_account=barber.stripe_account_id
         )
 
-        metadata = session.metadata or {}
+        metadata = session.metadata.to_dict() if session.metadata else {}
 
         if metadata.get("booking_id") != str(booking.id):
             raise HTTPException(
