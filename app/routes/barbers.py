@@ -471,7 +471,7 @@ def connect_my_stripe_account(
                         "payments": "stripe"
                     },
                     "stripe_dashboard": {
-                        "type": "express"
+                        "type": "full"
                     }
                 }
             )
