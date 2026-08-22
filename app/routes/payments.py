@@ -7,6 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import stripe
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.database import SessionLocal
@@ -22,6 +23,11 @@ stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 FRONTEND_URL = os.getenv(
     "FRONTEND_URL",
     "https://instantbarbers.com"
+).rstrip("/")
+
+BACKEND_URL = os.getenv(
+    "BACKEND_URL",
+    "https://instantbarbers.onrender.com"
 ).rstrip("/")
 
 PAYMENT_TIMEOUT_SECONDS = 90
@@ -76,6 +82,7 @@ async def expire_unpaid_checkout(
 
     except Exception as error:
         db.rollback()
+
         print(
             f"Error while expiring payment for booking "
             f"{booking_id}: {error}"
@@ -101,6 +108,12 @@ async def pay(
             raise HTTPException(
                 status_code=404,
                 detail="Booking not found"
+            )
+
+        if booking.client_id != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="This booking belongs to another customer"
             )
 
         if booking.status != BookingStatus.accepted:
@@ -197,9 +210,8 @@ async def pay(
                 "customer_user_id": str(current_user.id)
             },
             success_url=(
-                f"{FRONTEND_URL}/customer/booking-status"
-                f"?payment=success"
-                f"&booking_id={booking.id}"
+                f"{BACKEND_URL}/payments/return"
+                f"?booking_id={booking.id}"
                 f"&session_id={{CHECKOUT_SESSION_ID}}"
             ),
             cancel_url=(
@@ -236,6 +248,98 @@ async def pay(
             "session_id": session.id,
             "payment_timeout_seconds": PAYMENT_TIMEOUT_SECONDS
         }
+
+    except HTTPException:
+        raise
+
+    except stripe.StripeError as error:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        )
+
+    except Exception as error:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(error)
+        )
+
+    finally:
+        db.close()
+
+
+@router.get("/return")
+async def return_from_stripe(
+    booking_id: int,
+    session_id: str
+):
+    db = SessionLocal()
+
+    try:
+        booking = db.query(Booking).filter(
+            Booking.id == booking_id
+        ).first()
+
+        if not booking:
+            raise HTTPException(
+                status_code=404,
+                detail="Booking not found"
+            )
+
+        barber = db.query(Barber).filter(
+            Barber.id == booking.barber_id
+        ).first()
+
+        if not barber or not barber.stripe_account_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Barber has no Stripe account"
+            )
+
+        session = await run_in_threadpool(
+            stripe.checkout.Session.retrieve,
+            session_id,
+            stripe_account=barber.stripe_account_id
+        )
+
+        metadata = session.metadata or {}
+
+        if metadata.get("booking_id") != str(booking.id):
+            raise HTTPException(
+                status_code=400,
+                detail="Payment does not belong to this booking"
+            )
+
+        if metadata.get("customer_user_id") != str(
+            booking.client_id
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Payment does not belong to this customer"
+            )
+
+        if session.payment_status != "paid":
+            raise HTTPException(
+                status_code=400,
+                detail="Payment has not been completed"
+            )
+
+        booking.status = BookingStatus.paid
+        booking.expires_at = None
+
+        db.commit()
+
+        return RedirectResponse(
+            url=(
+                f"{FRONTEND_URL}/customer/booking-status"
+                f"?booking_id={booking.id}"
+            ),
+            status_code=303
+        )
 
     except HTTPException:
         raise
@@ -303,7 +407,9 @@ async def confirm_payment(
                 detail="Payment does not belong to this booking"
             )
 
-        if metadata.get("customer_user_id") != str(current_user.id):
+        if metadata.get("customer_user_id") != str(
+            current_user.id
+        ):
             raise HTTPException(
                 status_code=403,
                 detail="Payment does not belong to this customer"
