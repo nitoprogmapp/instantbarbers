@@ -28,7 +28,9 @@ def create_client(client: ClientCreate, db: Session = Depends(get_db)):
 
 @router.get("/count")
 def get_registered_clients_count(db: Session = Depends(get_db)):
-    registered_customers = db.query(Client).count()
+    total_clients = db.query(Client).count()
+
+    registered_customers = max(total_clients - 4, 0)
 
     return {
         "registered_customers": registered_customers,
