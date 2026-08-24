@@ -10,6 +10,7 @@ from app.routes.reviews import router as reviews_router
 from app.routes.barbers import router as barbers_router
 from app.routes.clients import router as clients_router
 from app.routes.stripe_webhooks import router as stripe_webhooks_router
+from app.routes.admin import router as admin_router
 
 from app.database import engine, Base
 from app.models import user, barber, service, booking, review
@@ -54,6 +55,7 @@ app.include_router(reviews_router)
 app.include_router(barbers_router)
 app.include_router(clients_router)
 app.include_router(stripe_webhooks_router)
+app.include_router(admin_router)
 
 
 # 🔥 FIX PROFESIONAL (startup controlado)

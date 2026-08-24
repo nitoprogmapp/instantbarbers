@@ -26,4 +26,5 @@ class Booking(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow)
     accepted_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)

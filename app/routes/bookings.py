@@ -713,6 +713,7 @@ def complete_booking(
         )
 
     booking.status = BookingStatus.completed
+    booking.completed_at = datetime.utcnow()
 
     db.commit()
     db.refresh(booking)
