@@ -13,8 +13,14 @@ from app.routes.stripe_webhooks import router as stripe_webhooks_router
 from app.routes.admin import router as admin_router
 
 from app.database import engine, Base
-from app.models import user, barber, service, booking, review
-
+from app.models import (
+    user,
+    barber,
+    service,
+    booking,
+    review,
+    payment_connection,
+)
 
 app = FastAPI(
     title="InstantBarber API",
