@@ -6,6 +6,8 @@ from pathlib import Path
 from app.routes.auth import router as auth_router
 from app.routes.bookings import router as bookings_router
 from app.routes.payments import router as payments_router
+from app.routes.square_oauth import router as square_oauth_router
+
 from app.routes.reviews import router as reviews_router
 from app.routes.barbers import router as barbers_router
 from app.routes.clients import router as clients_router
@@ -57,6 +59,7 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/auth", tags=["Auth"])
 app.include_router(bookings_router)
 app.include_router(payments_router)
+app.include_router(square_oauth_router)
 app.include_router(reviews_router)
 app.include_router(barbers_router)
 app.include_router(clients_router)
