@@ -140,6 +140,7 @@ def connect_with_square(
 
     authorization_parameters = {
         "client_id": square_application_id,
+                "response_type": "code",
         "scope": " ".join(SQUARE_SCOPES),
         "session": "false",
         "state": state_token,
