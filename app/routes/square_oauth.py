@@ -20,7 +20,6 @@ router = APIRouter(
     tags=["Square OAuth"],
 )
 
-
 STATE_ALGORITHM = "HS256"
 STATE_EXPIRES_MINUTES = 10
 SQUARE_API_VERSION = "2026-08-19"
@@ -140,9 +139,11 @@ def connect_with_square(
 
     authorization_parameters = {
         "client_id": square_application_id,
-                "response_type": "code",
+        "response_type": "code",
         "scope": " ".join(SQUARE_SCOPES),
-        "session": "false",
+        "session": (
+            "true" if square_environment == "sandbox" else "false"
+        ),
         "state": state_token,
         "redirect_uri": square_redirect_url,
     }
@@ -211,7 +212,10 @@ def square_oauth_callback(
     if barber is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="The barber associated with this authorization was not found.",
+            detail=(
+                "The barber associated with this authorization "
+                "was not found."
+            ),
         )
 
     if error:
@@ -241,6 +245,10 @@ def square_oauth_callback(
         "SQUARE_APPLICATION_SECRET"
     )
 
+    square_redirect_url = get_required_environment_variable(
+        "SQUARE_REDIRECT_URL"
+    )
+
     square_base_url = get_square_base_url(square_environment)
 
     token_request = {
@@ -248,6 +256,7 @@ def square_oauth_callback(
         "client_secret": square_application_secret,
         "code": code,
         "grant_type": "authorization_code",
+        "redirect_uri": square_redirect_url,
     }
 
     square_headers = {
@@ -262,7 +271,6 @@ def square_oauth_callback(
                 json=token_request,
                 headers=square_headers,
             )
-
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -315,17 +323,12 @@ def square_oauth_callback(
             provider="square",
             environment=square_environment,
         )
-
         db.add(payment_connection)
 
     payment_connection.merchant_id = merchant_id
     payment_connection.location_id = None
-    payment_connection.access_token_encrypted = (
-        encrypted_access_token
-    )
-    payment_connection.refresh_token_encrypted = (
-        encrypted_refresh_token
-    )
+    payment_connection.access_token_encrypted = encrypted_access_token
+    payment_connection.refresh_token_encrypted = encrypted_refresh_token
     payment_connection.token_expires_at = token_expires_at
     payment_connection.status = "pending"
 
@@ -344,7 +347,6 @@ def square_oauth_callback(
                 f"{square_base_url}/v2/locations",
                 headers=location_headers,
             )
-
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -374,8 +376,7 @@ def square_oauth_callback(
     payment_locations = [
         location
         for location in active_locations
-        if "CREDIT_CARD_PROCESSING"
-        in location.get("capabilities", [])
+        if "CREDIT_CARD_PROCESSING" in location.get("capabilities", [])
     ]
 
     selected_location = None
@@ -396,7 +397,9 @@ def square_oauth_callback(
 
     payment_connection.location_id = selected_location["id"]
     payment_connection.status = "connected"
-    payment_connection.connected_at = datetime.utcnow()
+    payment_connection.connected_at = (
+        datetime.now(timezone.utc).replace(tzinfo=None)
+    )
 
     db.commit()
     db.refresh(payment_connection)
