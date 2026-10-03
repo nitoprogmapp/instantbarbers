@@ -6,6 +6,8 @@ from urllib.parse import urlencode
 import httpx
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
+from sqlalchemy.exc import SQLAlchemyError
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
@@ -20,9 +22,11 @@ router = APIRouter(
     tags=["Square OAuth"],
 )
 
+
 STATE_ALGORITHM = "HS256"
 STATE_EXPIRES_MINUTES = 10
 SQUARE_API_VERSION = "2026-08-19"
+SQUARE_DASHBOARD_URL = "https://instantbarbers.com/barber/dashboard"
 
 SQUARE_SCOPES = [
     "MERCHANT_PROFILE_READ",
@@ -141,9 +145,7 @@ def connect_with_square(
         "client_id": square_application_id,
         "response_type": "code",
         "scope": " ".join(SQUARE_SCOPES),
-        "session": (
-            "true" if square_environment == "sandbox" else "false"
-        ),
+        "session": "true" if square_environment == "sandbox" else "false",
         "state": state_token,
         "redirect_uri": square_redirect_url,
     }
@@ -159,8 +161,7 @@ def connect_with_square(
     }
 
 
-@router.get("/oauth/callback")
-def square_oauth_callback(
+def complete_square_oauth(
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
@@ -212,10 +213,7 @@ def square_oauth_callback(
     if barber is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                "The barber associated with this authorization "
-                "was not found."
-            ),
+            detail="The barber associated with this authorization was not found.",
         )
 
     if error:
@@ -245,11 +243,8 @@ def square_oauth_callback(
         "SQUARE_APPLICATION_SECRET"
     )
 
-    square_redirect_url = get_required_environment_variable(
-        "SQUARE_REDIRECT_URL"
-    )
-
     square_base_url = get_square_base_url(square_environment)
+    square_redirect_url = get_required_environment_variable("SQUARE_REDIRECT_URL")
 
     token_request = {
         "client_id": square_application_id,
@@ -271,6 +266,7 @@ def square_oauth_callback(
                 json=token_request,
                 headers=square_headers,
             )
+
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -283,7 +279,15 @@ def square_oauth_callback(
             detail="Square rejected the OAuth token exchange.",
         )
 
-    token_data = token_response.json()
+    try:
+        token_data = token_response.json()
+        if not isinstance(token_data, dict):
+            raise ValueError("Invalid response")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Square returned an invalid OAuth response.",
+        ) from exc
 
     access_token = token_data.get("access_token")
     refresh_token = token_data.get("refresh_token")
@@ -323,12 +327,17 @@ def square_oauth_callback(
             provider="square",
             environment=square_environment,
         )
+
         db.add(payment_connection)
 
     payment_connection.merchant_id = merchant_id
     payment_connection.location_id = None
-    payment_connection.access_token_encrypted = encrypted_access_token
-    payment_connection.refresh_token_encrypted = encrypted_refresh_token
+    payment_connection.access_token_encrypted = (
+        encrypted_access_token
+    )
+    payment_connection.refresh_token_encrypted = (
+        encrypted_refresh_token
+    )
     payment_connection.token_expires_at = token_expires_at
     payment_connection.status = "pending"
 
@@ -347,6 +356,7 @@ def square_oauth_callback(
                 f"{square_base_url}/v2/locations",
                 headers=location_headers,
             )
+
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -365,7 +375,17 @@ def square_oauth_callback(
             ),
         )
 
-    locations = locations_response.json().get("locations", [])
+    try:
+        locations = locations_response.json().get("locations", [])
+        if not isinstance(locations, list) or any(
+            not isinstance(location, dict) for location in locations
+        ):
+            raise ValueError("Invalid locations")
+    except (ValueError, AttributeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Square returned an invalid location response.",
+        ) from exc
 
     active_locations = [
         location
@@ -376,7 +396,8 @@ def square_oauth_callback(
     payment_locations = [
         location
         for location in active_locations
-        if "CREDIT_CARD_PROCESSING" in location.get("capabilities", [])
+        if "CREDIT_CARD_PROCESSING"
+        in location.get("capabilities", [])
     ]
 
     selected_location = None
@@ -397,9 +418,7 @@ def square_oauth_callback(
 
     payment_connection.location_id = selected_location["id"]
     payment_connection.status = "connected"
-    payment_connection.connected_at = (
-        datetime.now(timezone.utc).replace(tzinfo=None)
-    )
+    payment_connection.connected_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     db.commit()
     db.refresh(payment_connection)
@@ -412,3 +431,80 @@ def square_oauth_callback(
         "location_id": payment_connection.location_id,
         "message": "Square account connected successfully.",
     }
+
+@router.get("/status")
+def square_connection_status(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    barber = db.query(Barber).filter(Barber.user_id == current_user.id).first()
+    if barber is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only registered barbers can view a Square connection.",
+        )
+
+    environment = get_required_environment_variable("SQUARE_ENVIRONMENT").lower()
+    get_square_base_url(environment)
+    connection = (
+        db.query(PaymentConnection)
+        .filter(
+            PaymentConnection.barber_id == barber.id,
+            PaymentConnection.provider == "square",
+            PaymentConnection.environment == environment,
+        )
+        .first()
+    )
+    connected = bool(
+        connection
+        and connection.status == "connected"
+        and connection.merchant_id
+        and connection.location_id
+        and connection.access_token_encrypted
+        and connection.refresh_token_encrypted
+    )
+    return {
+        "provider": "square",
+        "environment": environment,
+        "connected": connected,
+        "status": connection.status if connection else "not_connected",
+    }
+
+
+@router.get("/oauth/callback")
+def square_oauth_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+    db: Session = Depends(get_db),
+):
+    # Return only a fixed outcome, never Square tokens, codes, or error details.
+    try:
+        complete_square_oauth(
+            code=code,
+            state=state,
+            error=error,
+            error_description=error_description,
+            db=db,
+        )
+    except HTTPException as exc:
+        db.rollback()
+        if exc.detail == "Invalid or expired Square OAuth state.":
+            reason = "expired_or_invalid_state"
+        elif error:
+            reason = "authorization_denied"
+        elif exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+            reason = "configuration_error"
+        else:
+            reason = "connection_failed"
+        query = urlencode({"square": "error", "square_error": reason})
+    except SQLAlchemyError:
+        db.rollback()
+        query = urlencode({"square": "error", "square_error": "save_failed"})
+    else:
+        query = urlencode({"square": "connected"})
+    return RedirectResponse(
+        url=f"{SQUARE_DASHBOARD_URL}?{query}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
