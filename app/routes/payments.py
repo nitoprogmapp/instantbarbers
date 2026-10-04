@@ -97,6 +97,8 @@ async def pay(
     booking_id: int,
     current_user=Depends(get_current_user)
 ):
+    raise HTTPException(status_code=409, detail="Use the Square payment form for new payments.")
+
     db = SessionLocal()
 
     try:
@@ -452,3 +454,4 @@ async def confirm_payment(
 
     finally:
         db.close()
+        

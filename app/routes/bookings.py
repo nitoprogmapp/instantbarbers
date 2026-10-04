@@ -8,6 +8,7 @@ from app.models.barber import Barber
 from app.models.service import Service
 from app.models.user import User
 from app.models.client import Client
+from app.models.payment_attempt import has_unresolved_payment
 
 from app.routes.auth import get_current_user
 
@@ -60,84 +61,41 @@ def normalize_canadian_phone(phone):
 
 
 def mark_booking_expired_safely(booking: Booking, db: Session):
-    try:
-        if hasattr(BookingStatus, "expired"):
-            booking.status = BookingStatus.expired
-            db.commit()
-            db.refresh(booking)
-        else:
-            db.rollback()
-    except Exception:
-        db.rollback()
+    locked = db.query(Booking).filter(Booking.id == booking.id).populate_existing().with_for_update().first()
+    if (locked and status_value(locked.status) in ("pending", "accepted")
+            and locked.expires_at and locked.expires_at <= datetime.utcnow()
+            and not has_unresolved_payment(db, locked.id)):
+        locked.status = BookingStatus.expired
+        db.commit()
+        db.refresh(locked)
 
 
-def expire_old_time_limited_bookings_for_barber(
-    barber_id: int,
-    db: Session
-):
-    now = datetime.utcnow()
-
-    old_bookings = db.query(Booking).filter(
+def expire_old_time_limited_bookings_for_barber(barber_id: int, db: Session):
+    ids = db.query(Booking.id).filter(
         Booking.barber_id == barber_id,
-        Booking.status.in_(
-            TIME_LIMITED_BOOKING_STATUSES
-        ),
-        Booking.expires_at != None,
-        Booking.expires_at < now
+        Booking.status.in_(TIME_LIMITED_BOOKING_STATUSES),
+        Booking.expires_at < datetime.utcnow(),
     ).all()
-
-    for booking in old_bookings:
-        booking.status = BookingStatus.expired
-
-    if old_bookings:
-        db.commit()
+    for (booking_id,) in ids:
+        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        mark_booking_expired_safely(booking, db)
 
 
-def expire_old_time_limited_bookings_for_client(
-    client_user_id: int,
-    db: Session
-):
-    now = datetime.utcnow()
-
-    old_bookings = db.query(Booking).filter(
+def expire_old_time_limited_bookings_for_client(client_user_id: int, db: Session):
+    ids = db.query(Booking.id).filter(
         Booking.client_id == client_user_id,
-        Booking.status.in_(
-            TIME_LIMITED_BOOKING_STATUSES
-        ),
-        Booking.expires_at != None,
-        Booking.expires_at < now
+        Booking.status.in_(TIME_LIMITED_BOOKING_STATUSES),
+        Booking.expires_at < datetime.utcnow(),
     ).all()
-
-    for booking in old_bookings:
-        booking.status = BookingStatus.expired
-
-    if old_bookings:
-        db.commit()
+    for (booking_id,) in ids:
+        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        mark_booking_expired_safely(booking, db)
 
 
-def expire_old_time_limited_booking(
-    booking: Booking,
-    db: Session
-):
-    if not booking:
-        return
-
-    if status_value(booking.status) not in [
-        "pending",
-        "accepted"
-    ]:
-        return
-
-    if not booking.expires_at:
-        return
-
-    now = datetime.utcnow()
-
-    if now > booking.expires_at:
-        mark_booking_expired_safely(
-            booking,
-            db
-        )
+def expire_old_time_limited_booking(booking: Booking, db: Session):
+    if booking and status_value(booking.status) in ("pending", "accepted"):
+        if booking.expires_at and datetime.utcnow() >= booking.expires_at:
+            mark_booking_expired_safely(booking, db)
 
 
 def get_active_booking_for_barber(
@@ -571,7 +529,7 @@ def cancel_booking(
 
     booking = db.query(Booking).filter(
         Booking.id == booking_id
-    ).first()
+    ).populate_existing().with_for_update().first()
 
     if not booking:
         raise HTTPException(
@@ -584,6 +542,9 @@ def cancel_booking(
             status_code=403,
             detail="Not your booking"
         )
+
+    if has_unresolved_payment(db, booking.id):
+        raise HTTPException(409, "The Square payment must be confirmed before cancellation.")
 
     if status_value(booking.status) != "accepted":
         raise HTTPException(
@@ -647,32 +608,12 @@ def pay_booking(
             detail="Not your booking"
         )
 
-    if status_value(booking.status) != "accepted":
-        raise HTTPException(
-            status_code=400,
-            detail="Must be accepted first"
-        )
-
-    if booking.expires_at:
-        now = datetime.utcnow()
-
-        if now > booking.expires_at:
-            mark_booking_expired_safely(
-                booking,
-                db
-            )
-
-            raise HTTPException(
-                status_code=400,
-                detail="Expired"
-            )
-
-    booking.status = BookingStatus.paid
-
-    db.commit()
-    db.refresh(booking)
-
-    return booking
+    if status_value(booking.status) in ("paid", "completed"):
+        return booking
+    raise HTTPException(
+        409,
+        "Payment must be confirmed by the payment processor. Use /payments/square/pay.",
+    )
 
 
 # COMPLETE BOOKING (CLIENTE LOGUEADO)

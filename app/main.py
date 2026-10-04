@@ -7,87 +7,53 @@ from app.routes.auth import router as auth_router
 from app.routes.bookings import router as bookings_router
 from app.routes.payments import router as payments_router
 from app.routes.square_oauth import router as square_oauth_router
-
+from app.routes.square_payments import router as square_payments_router
 from app.routes.reviews import router as reviews_router
 from app.routes.barbers import router as barbers_router
 from app.routes.clients import router as clients_router
 from app.routes.stripe_webhooks import router as stripe_webhooks_router
 from app.routes.admin import router as admin_router
-
 from app.database import engine, Base
-from app.models import (
-    user,
-    barber,
-    service,
-    booking,
-    review,
-    payment_connection,
-)
+from app.models import user, barber, service, booking, review, payment_connection, payment_attempt
 
-app = FastAPI(
-    title="InstantBarber API",
-    version="1.0.0",
-    swagger_ui_parameters={"persistAuthorization": True}
-)
-
-# Folder for temporary uploaded barber photos
+app = FastAPI(title="InstantBarber API", version="1.0.0",
+              swagger_ui_parameters={"persistAuthorization": True})
 UPLOADS_DIR = Path("uploads")
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-
-# Serve uploaded files
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
-
-
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-        "https://instantbarbers.com",
-        "https://www.instantbarbers.com",
+        "http://localhost:3000", "http://127.0.0.1:3000",
+        "http://localhost:3001", "http://127.0.0.1:3001",
+        "https://instantbarbers.com", "https://www.instantbarbers.com",
         "https://ec257e2f-ca81-45a9-aedc-c16de05edb86.app-preview.com",
     ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
-
-# Routers
 app.include_router(auth_router, prefix="/auth", tags=["Auth"])
 app.include_router(bookings_router)
 app.include_router(payments_router)
 app.include_router(square_oauth_router)
+app.include_router(square_payments_router)
 app.include_router(reviews_router)
 app.include_router(barbers_router)
 app.include_router(clients_router)
 app.include_router(stripe_webhooks_router)
 app.include_router(admin_router)
 
-
-# 🔥 FIX PROFESIONAL (startup controlado)
 @app.on_event("startup")
 def on_startup():
-    print("🚀 Starting InstantBarber API...")
-
+    print("Starting InstantBarber API...")
     try:
         Base.metadata.create_all(bind=engine)
-        print("✅ Database connected and tables ready")
-
+        print("Database connected and tables ready")
     except Exception as e:
-        print("❌ Database connection failed:", str(e))
+        print("Database connection failed:", str(e))
 
-
-# Health check (clave para Render)
 @app.get("/")
 def read_root():
-    return {
-        "status": "ok",
-        "message": "InstantBarber API is running"
-    }
-
+    return {"status": "ok", "message": "InstantBarber API is running"}
 
 @app.get("/health")
 def health_check():
