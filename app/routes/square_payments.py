@@ -65,6 +65,13 @@ def money_cents(price):
         raise HTTPException(409, "The barber price is invalid.")
 
 
+def application_fee_cents(amount_cents):
+    # 3% of the gross haircut price, rounded HALF_UP to the nearest CAD cent.
+    # Integer arithmetic avoids floating-point errors. Square processing fees
+    # are separate and do not reduce the base used to calculate our 3%.
+    return (amount_cents * 3 + 50) // 100
+
+
 def value_of(value):
     return getattr(value, "value", value)
 
@@ -143,7 +150,11 @@ def result(attempt):
     }
 
 
-def payment_matches(payment, attempt):
+def payment_matches(payment, attempt, expected_fee=None):
+    # Old attempts created before application fees retain their original terms.
+    # For new attempts, verify Square returned the fee we actually submitted.
+    if expected_fee is not None and payment.get("app_fee_money") != expected_fee:
+        return False
     return (
         payment.get("id")
         and payment.get("source_type") == "CARD"
@@ -159,6 +170,10 @@ def process_attempt(db, booking, attempt):
     # cancellation acquire the same lock and never release an unresolved booking.
     _, token = connection(db, booking, attempt)
     try:
+        # Recover the original fee and request, never recalculate an existing
+        # attempt after a price change or a deployment.
+        payload = json.loads(decrypt(attempt.request_encrypted)) if attempt.request_encrypted else {}
+        expected_fee = payload.get("app_fee_money")
         if attempt.payment_id:
             response = square_request(token, "GET", "/v2/payments/" + attempt.payment_id)
         else:
@@ -169,10 +184,10 @@ def process_attempt(db, booking, attempt):
                 attempt.error_code = "RECONCILIATION_REQUIRED"
                 db.commit()
                 return result(attempt)
-            response = square_request(token, "POST", "/v2/payments", json.loads(decrypt(attempt.request_encrypted)))
+            response = square_request(token, "POST", "/v2/payments", payload)
         data = response.json()
         payment = data.get("payment")
-        if isinstance(payment, dict) and payment_matches(payment, attempt):
+        if isinstance(payment, dict) and payment_matches(payment, attempt, expected_fee):
             attempt.payment_id = payment["id"]
             payment_status = payment.get("status")
             if payment_status == "COMPLETED":
@@ -267,6 +282,9 @@ def pay(body: CardPaymentRequest, response: Response, db: Session = Depends(get_
         payload = {"source_id": body.source_id, "idempotency_key": body.idempotency_key,
                    "amount_money": {"amount": amount, "currency": "CAD"}, "autocomplete": True,
                    "location_id": saved.location_id, "reference_id": "booking:" + str(booking.id)}
+        fee = application_fee_cents(amount)
+        if fee > 0:
+            payload["app_fee_money"] = {"amount": fee, "currency": "CAD"}
         attempt = PaymentAttempt(booking_id=booking.id, client_id=current_user.id, barber_id=booking.barber_id,
             environment="sandbox", merchant_id=saved.merchant_id, location_id=saved.location_id,
             amount_cents=amount, currency="CAD", idempotency_key=body.idempotency_key,
