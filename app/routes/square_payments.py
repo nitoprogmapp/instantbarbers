@@ -16,6 +16,7 @@ from app.models.booking import Booking, BookingStatus
 from app.models.payment_connection import PaymentConnection
 from app.models.payment_attempt import PaymentAttempt, UNRESOLVED_PAYMENT_STATUSES
 from app.routes.auth import get_current_user
+from app.routes.square_token_refresh import renew_if_due
 
 router = APIRouter(prefix="/payments/square", tags=["Square Payments"])
 API_BASE = "https://connect.squareupsandbox.com"
@@ -99,10 +100,12 @@ def connection(db, booking, attempt=None):
         PaymentConnection.provider == "square",
         PaymentConnection.environment == "sandbox",
     ).first()
+    if saved and saved.status == "connected":
+        renew_if_due(db, saved)
     if not saved or saved.status != "connected" or not saved.access_token_encrypted or not saved.location_id:
         raise HTTPException(409, "The barber is not connected to Square Sandbox.")
-    if saved.token_expires_at and saved.token_expires_at <= datetime.utcnow():
-        raise HTTPException(409, "The barber's Square authorization has expired. Reconnect Square.")
+    if not saved.token_expires_at or saved.token_expires_at <= datetime.utcnow():
+        raise HTTPException(503, "Square authorization renewal is temporarily unavailable. Try again shortly.")
     if attempt and (saved.merchant_id != attempt.merchant_id or saved.location_id != attempt.location_id):
         raise HTTPException(409, "The seller connection changed. The previous payment must be reconciled first.")
     return saved, decrypt(saved.access_token_encrypted)

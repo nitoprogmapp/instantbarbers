@@ -17,6 +17,7 @@ from app.routes.admin import router as admin_router
 from app.database import engine, Base
 from app.models import user, barber, service, booking, review, payment_connection, payment_attempt
 from app.models import square_webhook
+from app.routes.square_token_refresh import start_maintenance, stop_maintenance
 
 app = FastAPI(title="InstantBarber API", version="1.0.0",
               swagger_ui_parameters={"persistAuthorization": True})
@@ -51,8 +52,14 @@ def on_startup():
     try:
         Base.metadata.create_all(bind=engine)
         print("Database connected and tables ready")
+        start_maintenance(app)
+        print("Square OAuth automatic maintenance started")
     except Exception as e:
         print("Database connection failed:", str(e))
+
+@app.on_event("shutdown")
+def on_shutdown():
+    stop_maintenance(app)
 
 @app.get("/")
 def read_root():
