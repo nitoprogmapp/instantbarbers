@@ -8,6 +8,7 @@ from app.routes.bookings import router as bookings_router
 from app.routes.payments import router as payments_router
 from app.routes.square_oauth import router as square_oauth_router
 from app.routes.square_payments import router as square_payments_router
+from app.routes.square_webhooks import router as square_webhooks_router
 from app.routes.reviews import router as reviews_router
 from app.routes.barbers import router as barbers_router
 from app.routes.clients import router as clients_router
@@ -15,6 +16,7 @@ from app.routes.stripe_webhooks import router as stripe_webhooks_router
 from app.routes.admin import router as admin_router
 from app.database import engine, Base
 from app.models import user, barber, service, booking, review, payment_connection, payment_attempt
+from app.models import square_webhook
 
 app = FastAPI(title="InstantBarber API", version="1.0.0",
               swagger_ui_parameters={"persistAuthorization": True})
@@ -36,6 +38,7 @@ app.include_router(bookings_router)
 app.include_router(payments_router)
 app.include_router(square_oauth_router)
 app.include_router(square_payments_router)
+app.include_router(square_webhooks_router)
 app.include_router(reviews_router)
 app.include_router(barbers_router)
 app.include_router(clients_router)
