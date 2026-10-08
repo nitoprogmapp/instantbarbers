@@ -38,14 +38,14 @@ def square_datetime(value):
 
 
 def webhook_config():
-    # This stage installs Sandbox webhooks only. Production is enabled in block 9.
-    if os.getenv("SQUARE_ENVIRONMENT", "").lower() != "sandbox":
-        raise HTTPException(503, "Square Sandbox webhook configuration is required.")
+    environment = os.getenv("SQUARE_ENVIRONMENT", "").lower()
+    if environment not in ("sandbox", "production"):
+        raise HTTPException(503, "Square webhook environment is missing or invalid.")
     key = os.getenv("SQUARE_WEBHOOK_SIGNATURE_KEY", "")
     url = os.getenv("SQUARE_WEBHOOK_NOTIFICATION_URL", "")
     if not key or not url.startswith("https://"):
         raise HTTPException(503, "Square webhook signature key and notification URL are not configured.")
-    return key, url
+    return key, url, environment
 
 
 def valid_signature(raw, signature, key, url):
@@ -79,7 +79,7 @@ def lock_attempt(db, candidate):
 def link_refunds(db, attempt):
     # Refund delivery can precede the payment response/webhook. Keep the signed
     # refund durably, then attach it only when its seller, location and amount match.
-    rows = db.query(SquarePaymentRefund).filter_by(environment="sandbox",
+    rows = db.query(SquarePaymentRefund).filter_by(environment=attempt.environment,
         merchant_id=attempt.merchant_id, payment_id=attempt.payment_id,
         payment_attempt_id=None).all()
     for refund in rows:
@@ -94,7 +94,7 @@ def handle_payment(db, event, receipt):
     if not isinstance(payment_id, str) or not payment_id:
         raise HTTPException(400, "Missing Square payment ID.")
     candidate = db.query(PaymentAttempt).filter_by(
-        environment="sandbox", merchant_id=event["merchant_id"], payment_id=payment_id
+        environment=receipt.environment, merchant_id=event["merchant_id"], payment_id=payment_id
     ).first()
     if not candidate:
         reference = payment.get("reference_id", "")
@@ -105,7 +105,7 @@ def handle_payment(db, event, receipt):
         except ValueError:
             return "ignored_unrelated_payment"
         candidates = db.query(PaymentAttempt).filter_by(
-            environment="sandbox", merchant_id=event["merchant_id"], booking_id=booking_id
+            environment=receipt.environment, merchant_id=event["merchant_id"], booking_id=booking_id
         ).all()
         if not candidates:
             return "ignored_unrelated_payment"
@@ -172,11 +172,11 @@ def handle_refund(db, event, receipt):
     if not isinstance(refund_id, str) or not refund_id or not isinstance(payment_id, str) or not payment_id:
         raise HTTPException(400, "Missing Square refund/payment ID.")
     candidate = db.query(PaymentAttempt).filter_by(
-        environment="sandbox", merchant_id=event["merchant_id"], payment_id=payment_id
+        environment=receipt.environment, merchant_id=event["merchant_id"], payment_id=payment_id
     ).first()
     if not candidate:
         seller = db.query(PaymentConnection.id).filter_by(
-            provider="square", environment="sandbox", merchant_id=event["merchant_id"]
+            provider="square", environment=receipt.environment, merchant_id=event["merchant_id"]
         ).first()
         if not seller:
             return "ignored_unrelated_refund"
@@ -194,7 +194,7 @@ def handle_refund(db, event, receipt):
             or status not in ("PENDING", "COMPLETED", "FAILED", "REJECTED")):
         return "review_refund_details"
     updated = square_datetime(refund.get("updated_at") or refund.get("created_at"))
-    saved = db.query(SquarePaymentRefund).filter_by(environment="sandbox", refund_id=refund_id).first()
+    saved = db.query(SquarePaymentRefund).filter_by(environment=receipt.environment, refund_id=refund_id).first()
     if saved:
         if (saved.payment_id != payment_id or saved.merchant_id != event["merchant_id"]
                 or saved.location_id != location_id or saved.amount_cents != money["amount"]
@@ -205,7 +205,7 @@ def handle_refund(db, event, receipt):
         if saved.square_updated_at >= updated or saved.status == "COMPLETED":
             return "ignored_old_refund"
     else:
-        saved = SquarePaymentRefund(environment="sandbox", refund_id=refund_id,
+        saved = SquarePaymentRefund(environment=receipt.environment, refund_id=refund_id,
             payment_attempt_id=attempt.id if attempt else None, payment_id=payment_id,
             merchant_id=event["merchant_id"], location_id=location_id,
             amount_cents=money["amount"], currency=money["currency"])
@@ -221,11 +221,11 @@ def handle_refund(db, event, receipt):
     return "refund_" + status.lower()
 
 
-def handle_revocation(db, event):
+def handle_revocation(db, event, environment):
     revocation = event_object(event, "revocation")
     revoked_at = square_datetime(revocation.get("revoked_at"))
     rows = db.query(PaymentConnection).filter_by(
-        provider="square", environment="sandbox", merchant_id=event["merchant_id"]
+        provider="square", environment=environment, merchant_id=event["merchant_id"]
     ).populate_existing().with_for_update().all()
     changed = 0
     for connection in rows:
@@ -240,20 +240,20 @@ def handle_revocation(db, event):
     return "authorization_revoked" if changed else "ignored_old_or_unrelated_revocation"
 
 
-def process_event(db, event, digest):
-    previous = db.query(SquareWebhookEvent).filter_by(environment="sandbox", event_id=event["event_id"]).first()
+def process_event(db, event, digest, environment):
+    previous = db.query(SquareWebhookEvent).filter_by(environment=environment, event_id=event["event_id"]).first()
     if previous:
         if previous.body_sha256 != digest:
             raise HTTPException(400, "Square event ID was reused with a different body.")
         return {"received": True, "duplicate": True}
-    receipt = SquareWebhookEvent(environment="sandbox", event_id=event["event_id"],
+    receipt = SquareWebhookEvent(environment=environment, event_id=event["event_id"],
         event_type=event["type"], merchant_id=event["merchant_id"], body_sha256=digest)
     db.add(receipt)
     try:
         db.flush()
     except IntegrityError:
         db.rollback()
-        previous = db.query(SquareWebhookEvent).filter_by(environment="sandbox", event_id=event["event_id"]).first()
+        previous = db.query(SquareWebhookEvent).filter_by(environment=environment, event_id=event["event_id"]).first()
         if previous and previous.body_sha256 == digest:
             return {"received": True, "duplicate": True}
         raise HTTPException(503, "Square event could not be recorded; retry notification.")
@@ -263,7 +263,7 @@ def process_event(db, event, digest):
     elif event_type.startswith("refund.") and event_type in SUPPORTED_EVENTS:
         receipt.outcome = handle_refund(db, event, receipt)
     elif event_type == "oauth.authorization.revoked":
-        receipt.outcome = handle_revocation(db, event)
+        receipt.outcome = handle_revocation(db, event, environment)
     else:
         receipt.outcome = "ignored_event_type"
     receipt.processed_at = datetime.utcnow()
@@ -273,7 +273,7 @@ def process_event(db, event, digest):
 
 @router.post("/webhook")
 async def square_webhook(request: Request, db: Session = Depends(get_db)):
-    key, url = webhook_config()
+    key, url, environment = webhook_config()
     raw = bytearray()
     async for chunk in request.stream():
         raw.extend(chunk)
@@ -282,7 +282,7 @@ async def square_webhook(request: Request, db: Session = Depends(get_db)):
     raw = bytes(raw)
     if not valid_signature(raw, request.headers.get("x-square-hmacsha256-signature", ""), key, url):
         raise HTTPException(403, "Invalid Square webhook signature.")
-    if request.headers.get("square-environment", "sandbox").lower() != "sandbox":
+    if request.headers.get("square-environment", environment).lower() != environment:
         raise HTTPException(400, "Wrong Square webhook environment.")
     try:
         event = json.loads(raw)
@@ -294,7 +294,7 @@ async def square_webhook(request: Request, db: Session = Depends(get_db)):
     ):
         raise HTTPException(400, "Missing or invalid Square event metadata.")
     try:
-        return await run_in_threadpool(process_event, db, event, hashlib.sha256(raw).hexdigest())
+        return await run_in_threadpool(process_event, db, event, hashlib.sha256(raw).hexdigest(), environment)
     except HTTPException:
         db.rollback()
         raise
@@ -303,4 +303,3 @@ async def square_webhook(request: Request, db: Session = Depends(get_db)):
         # Do not log event bodies, card details, OAuth tokens or database URLs.
         logger.error("Square webhook database processing failed; Square must retry.")
         raise HTTPException(503, "Square webhook could not be saved; retry notification.")
-    

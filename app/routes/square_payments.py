@@ -3,6 +3,7 @@ import os
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from uuid import UUID
+from typing import Literal
 
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
@@ -19,7 +20,6 @@ from app.routes.auth import get_current_user
 from app.routes.square_token_refresh import renew_if_due
 
 router = APIRouter(prefix="/payments/square", tags=["Square Payments"])
-API_BASE = "https://connect.squareupsandbox.com"
 API_VERSION = "2026-08-19"
 
 
@@ -28,15 +28,27 @@ class CardPaymentRequest(BaseModel):
     source_id: str = Field(min_length=1, max_length=1024)
     idempotency_key: str = Field(min_length=36, max_length=36)
     expected_amount_cents: int = Field(gt=0)
+    environment: Literal["sandbox", "production"] | None = None
 
 
-def sandbox_config():
-    if os.getenv("SQUARE_ENVIRONMENT", "").lower() != "sandbox":
-        raise HTTPException(503, "This payment flow currently requires Square Sandbox.")
+def current_environment():
+    environment = os.getenv("SQUARE_ENVIRONMENT", "").lower()
+    if environment not in ("sandbox", "production"):
+        raise HTTPException(503, "Square payment environment is missing or invalid.")
+    return environment
+
+
+def square_config():
+    environment = current_environment()
     app_id = os.getenv("SQUARE_APPLICATION_ID", "")
-    if not app_id.startswith("sandbox-"):
-        raise HTTPException(503, "A Sandbox SQUARE_APPLICATION_ID is required.")
+    if not app_id or app_id.startswith("sandbox-") != (environment == "sandbox"):
+        raise HTTPException(503, "SQUARE_APPLICATION_ID does not match the payment environment.")
     return app_id
+
+
+def assert_attempt_environment(attempt):
+    if attempt and attempt.environment != current_environment():
+        raise HTTPException(409, "This booking contains a payment from another Square environment. Start a new booking.")
 
 
 def cipher():
@@ -89,21 +101,23 @@ def client_booking(db, booking_id, user):
 
 
 def latest_attempt(db, booking_id):
-    return db.query(PaymentAttempt).filter(
+    attempt = db.query(PaymentAttempt).filter(
         PaymentAttempt.booking_id == booking_id
     ).order_by(PaymentAttempt.id.desc()).first()
+    assert_attempt_environment(attempt)
+    return attempt
 
 
 def connection(db, booking, attempt=None):
     saved = db.query(PaymentConnection).filter(
         PaymentConnection.barber_id == booking.barber_id,
         PaymentConnection.provider == "square",
-        PaymentConnection.environment == "sandbox",
-    ).first()
+        PaymentConnection.environment == current_environment(),
+    ).populate_existing().first()
     if saved and saved.status == "connected":
         renew_if_due(db, saved)
     if not saved or saved.status != "connected" or not saved.access_token_encrypted or not saved.location_id:
-        raise HTTPException(409, "The barber is not connected to Square Sandbox.")
+        raise HTTPException(409, "The barber is not connected to Square in the current payment environment.")
     if not saved.token_expires_at or saved.token_expires_at <= datetime.utcnow():
         raise HTTPException(503, "Square authorization renewal is temporarily unavailable. Try again shortly.")
     if attempt and (saved.merchant_id != attempt.merchant_id or saved.location_id != attempt.location_id):
@@ -112,8 +126,10 @@ def connection(db, booking, attempt=None):
 
 
 def square_request(token, method, path, payload=None):
+    square_config()
+    base_url = "https://connect.squareupsandbox.com" if current_environment() == "sandbox" else "https://connect.squareup.com"
     with httpx.Client(timeout=httpx.Timeout(25.0, connect=10.0)) as client:
-        return client.request(method, API_BASE + path, headers={
+        return client.request(method, base_url + path, headers={
             "Authorization": "Bearer " + token,
             "Square-Version": API_VERSION,
             "Content-Type": "application/json",
@@ -169,6 +185,7 @@ def payment_matches(payment, attempt, expected_fee=None):
 
 
 def process_attempt(db, booking, attempt):
+    assert_attempt_environment(attempt)
     # The booking row stays locked while Square is contacted. Expiration and
     # cancellation acquire the same lock and never release an unresolved booking.
     _, token = connection(db, booking, attempt)
@@ -231,7 +248,7 @@ def process_attempt(db, booking, attempt):
 @router.get("/checkout")
 def checkout(booking_id: int, response: Response, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     response.headers["Cache-Control"] = "no-store"
-    app_id = sandbox_config()
+    app_id = square_config()
     booking = client_booking(db, booking_id, current_user)
     attempt = latest_attempt(db, booking.id)
     if attempt and attempt.status in UNRESOLVED_PAYMENT_STATUSES + ("completed",):
@@ -242,7 +259,7 @@ def checkout(booking_id: int, response: Response, db: Session = Depends(get_db),
     barber = db.query(Barber).filter(Barber.id == booking.barber_id).first()
     if not barber:
         raise HTTPException(404, "Barber not found.")
-    return {"booking_id": booking.id, "environment": "sandbox", "application_id": app_id,
+    return {"booking_id": booking.id, "environment": current_environment(), "application_id": app_id,
             "location_id": saved.location_id, "amount_cents": money_cents(barber.price), "currency": "CAD",
             "buyer_email": getattr(current_user, "email", ""), "expires_at": booking.expires_at}
 
@@ -250,7 +267,12 @@ def checkout(booking_id: int, response: Response, db: Session = Depends(get_db),
 @router.post("/pay")
 def pay(body: CardPaymentRequest, response: Response, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     response.headers["Cache-Control"] = "no-store"
-    sandbox_config()
+    square_config()
+    environment = current_environment()
+    # Old Sandbox clients remain compatible. Production requires the new client
+    # to explicitly identify its SDK environment before any processor request.
+    if body.environment != environment and (body.environment is not None or environment == "production"):
+        raise HTTPException(409, "The payment environment changed. Reload the page before paying.")
     try:
         if str(UUID(body.idempotency_key)) != body.idempotency_key:
             raise ValueError()
@@ -262,6 +284,7 @@ def pay(body: CardPaymentRequest, response: Response, db: Session = Depends(get_
         return result(attempt)
     old = db.query(PaymentAttempt).filter(PaymentAttempt.idempotency_key == body.idempotency_key).first()
     if old:
+        assert_attempt_environment(old)
         if old.booking_id != booking.id or old.client_id != current_user.id:
             raise HTTPException(409, "This payment key belongs to another request.")
         if old.status == "failed":
@@ -289,7 +312,7 @@ def pay(body: CardPaymentRequest, response: Response, db: Session = Depends(get_
         if fee > 0:
             payload["app_fee_money"] = {"amount": fee, "currency": "CAD"}
         attempt = PaymentAttempt(booking_id=booking.id, client_id=current_user.id, barber_id=booking.barber_id,
-            environment="sandbox", merchant_id=saved.merchant_id, location_id=saved.location_id,
+            environment=environment, merchant_id=saved.merchant_id, location_id=saved.location_id,
             amount_cents=amount, currency="CAD", idempotency_key=body.idempotency_key,
             request_encrypted=cipher().encrypt(json.dumps(payload, sort_keys=True).encode()).decode(), status="processing")
         db.add(attempt)
@@ -307,7 +330,7 @@ def pay(body: CardPaymentRequest, response: Response, db: Session = Depends(get_
 @router.post("/retry/{booking_id}")
 def retry(booking_id: int, response: Response, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     response.headers["Cache-Control"] = "no-store"
-    sandbox_config()
+    square_config()
     booking = client_booking(db, booking_id, current_user)
     attempt = latest_attempt(db, booking.id)
     if not attempt:
