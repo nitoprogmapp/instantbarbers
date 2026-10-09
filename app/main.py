@@ -14,6 +14,7 @@ from app.routes.barbers import router as barbers_router
 from app.routes.clients import router as clients_router
 from app.routes.stripe_webhooks import router as stripe_webhooks_router
 from app.routes.admin import router as admin_router
+from app.routes.directory import router as directory_router, seed_directory
 from app.database import engine, Base
 from app.models import user, barber, service, booking, review, payment_connection, payment_attempt
 from app.models import square_webhook
@@ -45,6 +46,7 @@ app.include_router(barbers_router)
 app.include_router(clients_router)
 app.include_router(stripe_webhooks_router)
 app.include_router(admin_router)
+app.include_router(directory_router)
 
 @app.on_event("startup")
 def on_startup():
@@ -56,6 +58,14 @@ def on_startup():
         print("Square OAuth automatic maintenance started")
     except Exception as e:
         print("Database connection failed:", str(e))
+
+@app.on_event("startup")
+def initialize_directory():
+    try:
+        inserted = seed_directory()
+        print(f"Barber directory ready: {inserted} new entries")
+    except Exception as e:
+        print("Barber directory initialization failed:", str(e))
 
 @app.on_event("shutdown")
 def on_shutdown():
