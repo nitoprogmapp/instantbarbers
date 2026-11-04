@@ -21,6 +21,7 @@ from app.routes.square_token_refresh import renew_if_due
 
 router = APIRouter(prefix="/payments/square", tags=["Square Payments"])
 API_VERSION = "2026-08-19"
+PLATFORM_FEE_CENTS = 1000  # Fixed CA$10 InstantBarbers fee per haircut.
 
 
 class CardPaymentRequest(BaseModel):
@@ -79,10 +80,13 @@ def money_cents(price):
 
 
 def application_fee_cents(amount_cents):
-    # 3% of the gross haircut price, rounded HALF_UP to the nearest CAD cent.
-    # Integer arithmetic avoids floating-point errors. Square processing fees
-    # are separate and do not reduce the base used to calculate our 3%.
-    return (amount_cents * 3 + 50) // 100
+    # Square limits the application fee to 90% of CAD payments at or above
+    # CA$5 (and to 60% below CA$5). Reject incompatible prices before sending
+    # the payment request instead of letting Square fail after card entry.
+    maximum_percentage = 90 if amount_cents >= 500 else 60
+    if PLATFORM_FEE_CENTS * 100 > amount_cents * maximum_percentage:
+        raise HTTPException(409, "The haircut price is too low for the fixed CA$10 platform fee.")
+    return PLATFORM_FEE_CENTS
 
 
 def value_of(value):
