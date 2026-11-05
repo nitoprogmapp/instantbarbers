@@ -16,7 +16,8 @@ from app.routes.stripe_webhooks import router as stripe_webhooks_router
 from app.routes.admin import router as admin_router
 from app.routes.directory import router as directory_router, seed_directory
 from app.database import engine, Base
-from app.models import user, barber, service, booking, review, payment_connection, payment_attempt
+from app.models import user, barber, service, booking, review, payment_connection, payment_attempt, affiliate
+
 from app.models import square_webhook
 from app.routes.square_token_refresh import start_maintenance, stop_maintenance
 
