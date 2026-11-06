@@ -21,6 +21,7 @@ from app.services.email_service import (
     send_verification_email,
     send_password_reset_email,
 )
+from app.services.affiliate_service import create_affiliate_profile
 
 
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -156,6 +157,12 @@ def register(
     data: RegisterRequest,
     db: Session = Depends(get_db)
 ):
+    if data.role == UserRole.admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin registration is not allowed"
+        )
+
     email = str(data.email).lower().strip()
 
     existing_user = (
@@ -203,6 +210,11 @@ def register(
             )
 
             db.add(new_barber)
+
+        affiliate_profile = create_affiliate_profile(
+            db=db,
+            user=new_user,
+        )
 
         verification_token = create_email_verification_token(
             new_user.id
