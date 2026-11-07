@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from app.routes.auth import router as auth_router
+from app.routes.affiliates import router as affiliates_router
 from app.routes.bookings import router as bookings_router
 from app.routes.payments import router as payments_router
 from app.routes.square_oauth import router as square_oauth_router
@@ -37,6 +38,7 @@ app.add_middleware(
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 app.include_router(auth_router, prefix="/auth", tags=["Auth"])
+app.include_router(affiliates_router)
 app.include_router(bookings_router)
 app.include_router(payments_router)
 app.include_router(square_oauth_router)
