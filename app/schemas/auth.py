@@ -10,6 +10,7 @@ class RegisterRequest(BaseModel):
     password: str
     role: UserRole
     name: str
+    referral_code: Optional[str] = None
 
     # Datos del cliente
     phone: Optional[str] = None

@@ -21,7 +21,10 @@ from app.services.email_service import (
     send_verification_email,
     send_password_reset_email,
 )
-from app.services.affiliate_service import create_affiliate_profile
+from app.services.affiliate_service import (
+    create_affiliate_profile,
+    create_referral_attribution,
+)
 
 
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -204,7 +207,11 @@ def register(
                 shop_name=data.shop_name,
                 phone=data.phone,
                 address=data.address,
-                price=data.price if data.price is not None else 4000,
+                price=(
+                    data.price
+                    if data.price is not None
+                    else 4000
+                ),
                 active=True,
                 user_id=new_user.id
             )
@@ -214,6 +221,12 @@ def register(
         affiliate_profile = create_affiliate_profile(
             db=db,
             user=new_user,
+        )
+
+        referral_attribution = create_referral_attribution(
+            db=db,
+            referred_user=new_user,
+            referral_code=data.referral_code,
         )
 
         verification_token = create_email_verification_token(
@@ -256,7 +269,10 @@ def register(
         ),
         "user_id": new_user.id,
         "role": new_user.role.value,
-        "email_verified": new_user.email_verified
+        "email_verified": new_user.email_verified,
+        "referral_applied": (
+            referral_attribution is not None
+        )
     }
 
 

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.models.affiliate import (
     AffiliateOwnerType,
     AffiliateProfile,
+    ReferralAttribution,
 )
 from app.models.user import User, UserRole
 
@@ -92,3 +93,61 @@ def create_affiliate_profile(
     db.flush()
 
     return affiliate_profile
+
+
+def create_referral_attribution(
+    db: Session,
+    referred_user: User,
+    referral_code: str | None,
+):
+    if not referral_code:
+        return None
+
+    normalized_code = referral_code.strip().upper()
+
+    if not normalized_code:
+        return None
+
+    referrer_profile = (
+        db.query(AffiliateProfile)
+        .filter(
+            AffiliateProfile.referral_code
+            == normalized_code
+        )
+        .first()
+    )
+
+    if referrer_profile is None:
+        return None
+
+    if referrer_profile.user_id == referred_user.id:
+        return None
+
+    existing_attribution = (
+        db.query(ReferralAttribution)
+        .filter(
+            ReferralAttribution.referred_user_id
+            == referred_user.id
+        )
+        .first()
+    )
+
+    if existing_attribution:
+        return existing_attribution
+
+    referred_role = get_owner_type(referred_user)
+
+    if referred_role is None:
+        return None
+
+    attribution = ReferralAttribution(
+        referrer_profile_id=referrer_profile.id,
+        referred_user_id=referred_user.id,
+        referred_role=referred_role,
+        referral_code_used=referrer_profile.referral_code,
+    )
+
+    db.add(attribution)
+    db.flush()
+
+    return attribution
