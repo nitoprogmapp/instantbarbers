@@ -7,6 +7,9 @@ from app.database import get_db
 from app.models.affiliate import AffiliateProfile
 from app.models.user import User
 from app.routes.auth import get_current_user
+from app.services.affiliate_service import (
+    get_referral_progress,
+)
 
 
 FRONTEND_URL = os.getenv(
@@ -37,7 +40,10 @@ def get_my_affiliate_information(
     if affiliate_profile is None:
         raise HTTPException(
             status_code=404,
-            detail="This account does not have an affiliate profile",
+            detail=(
+                "This account does not have "
+                "an affiliate profile"
+            ),
         )
 
     personal_link = (
@@ -52,3 +58,25 @@ def get_my_affiliate_information(
         "personal_link": personal_link,
         "status": affiliate_profile.status.value,
     }
+
+
+@router.get("/me/referrals")
+def get_my_referrals(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    referral_progress = get_referral_progress(
+        db=db,
+        user=current_user,
+    )
+
+    if referral_progress is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "This account does not have "
+                "an affiliate profile"
+            ),
+        )
+
+    return referral_progress

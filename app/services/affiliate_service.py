@@ -7,6 +7,7 @@ from app.models.affiliate import (
     AffiliateOwnerType,
     AffiliateProfile,
     ReferralAttribution,
+    ReferralStatus,
 )
 from app.models.user import User, UserRole
 
@@ -151,3 +152,119 @@ def create_referral_attribution(
     db.flush()
 
     return attribution
+
+
+def mask_email(email: str | None):
+    if not email or "@" not in email:
+        return "InstantBarbers user"
+
+    local_part, domain = email.split("@", 1)
+
+    if len(local_part) <= 1:
+        masked_local_part = "*"
+    else:
+        masked_local_part = (
+            local_part[0]
+            + "*" * min(len(local_part) - 1, 5)
+        )
+
+    return f"{masked_local_part}@{domain}"
+
+
+def get_referred_user_name(user: User):
+    if user.role == UserRole.client and user.client:
+        client_name = getattr(user.client, "name", None)
+
+        if client_name:
+            return client_name
+
+    if user.role == UserRole.barber and user.barber:
+        barber_name = getattr(user.barber, "name", None)
+
+        if barber_name:
+            return barber_name
+
+    return mask_email(user.email)
+
+
+def get_referral_progress(
+    db: Session,
+    user: User,
+):
+    affiliate_profile = (
+        db.query(AffiliateProfile)
+        .filter(
+            AffiliateProfile.user_id == user.id
+        )
+        .first()
+    )
+
+    if affiliate_profile is None:
+        return None
+
+    attributions = (
+        db.query(ReferralAttribution)
+        .filter(
+            ReferralAttribution.referrer_profile_id
+            == affiliate_profile.id
+        )
+        .order_by(ReferralAttribution.created_at.desc())
+        .all()
+    )
+
+    total_referrals = len(attributions)
+
+    active_referrals = sum(
+        1
+        for attribution in attributions
+        if attribution.status == ReferralStatus.active
+    )
+
+    inactive_referrals = (
+        total_referrals - active_referrals
+    )
+
+    if total_referrals:
+        active_percentage = round(
+            (active_referrals / total_referrals) * 100,
+            1,
+        )
+    else:
+        active_percentage = 0.0
+
+    referrals = []
+
+    for attribution in attributions:
+        referred_user = attribution.referred_user
+
+        is_active = (
+            attribution.status == ReferralStatus.active
+        )
+
+        referrals.append(
+            {
+                "referral_id": attribution.id,
+                "name": get_referred_user_name(
+                    referred_user
+                ),
+                "role": attribution.referred_role.value,
+                "status": (
+                    "active"
+                    if is_active
+                    else "inactive"
+                ),
+                "registered_at": attribution.created_at,
+                "activated_at": attribution.activated_at,
+            }
+        )
+
+    return {
+        "user_role": affiliate_profile.owner_type.value,
+        "total_referrals": total_referrals,
+        "active_referrals": active_referrals,
+        "inactive_referrals": inactive_referrals,
+        "progress": {
+            "active_percentage": active_percentage,
+        },
+        "referrals": referrals,
+    }
