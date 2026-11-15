@@ -11,6 +11,9 @@ from app.models.client import Client
 from app.models.payment_attempt import has_unresolved_payment
 
 from app.routes.auth import get_current_user
+from app.services.affiliate_activation_service import (
+    refresh_after_completed_booking,
+)
 
 
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
@@ -61,57 +64,91 @@ def normalize_canadian_phone(phone):
 
 
 def mark_booking_expired_safely(booking: Booking, db: Session):
-    locked = db.query(Booking).filter(Booking.id == booking.id).populate_existing().with_for_update().first()
-    if (locked and status_value(locked.status) in ("pending", "accepted")
-            and locked.expires_at and locked.expires_at <= datetime.utcnow()
-            and not has_unresolved_payment(db, locked.id)):
+    locked = (
+        db.query(Booking)
+        .filter(Booking.id == booking.id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+
+    if (
+        locked
+        and status_value(locked.status) in ("pending", "accepted")
+        and locked.expires_at
+        and locked.expires_at <= datetime.utcnow()
+        and not has_unresolved_payment(db, locked.id)
+    ):
         locked.status = BookingStatus.expired
         db.commit()
         db.refresh(locked)
 
 
-def expire_old_time_limited_bookings_for_barber(barber_id: int, db: Session):
+def expire_old_time_limited_bookings_for_barber(
+    barber_id: int,
+    db: Session,
+):
     ids = db.query(Booking.id).filter(
         Booking.barber_id == barber_id,
         Booking.status.in_(TIME_LIMITED_BOOKING_STATUSES),
         Booking.expires_at < datetime.utcnow(),
     ).all()
+
     for (booking_id,) in ids:
-        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        booking = db.query(Booking).filter(
+            Booking.id == booking_id
+        ).first()
+
         mark_booking_expired_safely(booking, db)
 
 
-def expire_old_time_limited_bookings_for_client(client_user_id: int, db: Session):
+def expire_old_time_limited_bookings_for_client(
+    client_user_id: int,
+    db: Session,
+):
     ids = db.query(Booking.id).filter(
         Booking.client_id == client_user_id,
         Booking.status.in_(TIME_LIMITED_BOOKING_STATUSES),
         Booking.expires_at < datetime.utcnow(),
     ).all()
+
     for (booking_id,) in ids:
-        booking = db.query(Booking).filter(Booking.id == booking_id).first()
+        booking = db.query(Booking).filter(
+            Booking.id == booking_id
+        ).first()
+
         mark_booking_expired_safely(booking, db)
 
 
-def expire_old_time_limited_booking(booking: Booking, db: Session):
-    if booking and status_value(booking.status) in ("pending", "accepted"):
-        if booking.expires_at and datetime.utcnow() >= booking.expires_at:
+def expire_old_time_limited_booking(
+    booking: Booking,
+    db: Session,
+):
+    if (
+        booking
+        and status_value(booking.status) in ("pending", "accepted")
+    ):
+        if (
+            booking.expires_at
+            and datetime.utcnow() >= booking.expires_at
+        ):
             mark_booking_expired_safely(booking, db)
 
 
 def get_active_booking_for_barber(
     barber_id: int,
-    db: Session
+    db: Session,
 ):
     expire_old_time_limited_bookings_for_barber(
         barber_id,
-        db
+        db,
     )
 
     return db.query(Booking).filter(
         Booking.barber_id == barber_id,
         Booking.status.in_(
             ACTIVE_BOOKING_STATUSES
-        )
+        ),
     ).order_by(
         Booking.created_at.asc()
     ).first()
@@ -119,18 +156,18 @@ def get_active_booking_for_barber(
 
 def get_active_booking_for_client(
     client_user_id: int,
-    db: Session
+    db: Session,
 ):
     expire_old_time_limited_bookings_for_client(
         client_user_id,
-        db
+        db,
     )
 
     return db.query(Booking).filter(
         Booking.client_id == client_user_id,
         Booking.status.in_(
             ACTIVE_BOOKING_STATUSES
-        )
+        ),
     ).order_by(
         Booking.created_at.desc()
     ).first()
@@ -138,7 +175,7 @@ def get_active_booking_for_client(
 
 def booking_to_barber_response(
     booking: Booking,
-    db: Session
+    db: Session,
 ):
     client = db.query(Client).filter(
         Client.user_id == booking.client_id
@@ -173,8 +210,8 @@ def booking_to_barber_response(
                 client.address
                 if client
                 else None
-            )
-        }
+            ),
+        },
     }
 
 
@@ -186,12 +223,12 @@ def create_booking(
     db: Session = Depends(get_db),
     current_user: User = Depends(
         get_current_user
-    )
+    ),
 ):
     if role_value(current_user.role) != "client":
         raise HTTPException(
             status_code=403,
-            detail="Only clients can create bookings"
+            detail="Only clients can create bookings",
         )
 
     barber = db.query(Barber).filter(
@@ -201,7 +238,7 @@ def create_booking(
     if not barber:
         raise HTTPException(
             status_code=404,
-            detail="Barber not found"
+            detail="Barber not found",
         )
 
     if barber.active is not True:
@@ -210,7 +247,7 @@ def create_booking(
             detail=(
                 "This barber is not available right now. "
                 "Please choose another barber."
-            )
+            ),
         )
 
     service = db.query(Service).filter(
@@ -220,12 +257,12 @@ def create_booking(
     if not service:
         raise HTTPException(
             status_code=404,
-            detail="Service not found"
+            detail="Service not found",
         )
 
     active_booking = get_active_booking_for_barber(
         barber_id,
-        db
+        db,
     )
 
     if active_booking:
@@ -234,7 +271,7 @@ def create_booking(
             detail=(
                 "This barber is no longer available. "
                 "Please choose another barber."
-            )
+            ),
         )
 
     now = datetime.utcnow()
@@ -246,7 +283,7 @@ def create_booking(
         status=BookingStatus.pending,
         expires_at=now + timedelta(
             seconds=30
-        )
+        ),
     )
 
     db.add(booking)
@@ -262,12 +299,12 @@ def get_my_bookings(
     db: Session = Depends(get_db),
     current_user: User = Depends(
         get_current_user
-    )
+    ),
 ):
     if role_value(current_user.role) != "barber":
         raise HTTPException(
             status_code=403,
-            detail="Only barbers can view bookings"
+            detail="Only barbers can view bookings",
         )
 
     barber = db.query(Barber).filter(
@@ -277,12 +314,12 @@ def get_my_bookings(
     if not barber:
         raise HTTPException(
             status_code=404,
-            detail="Barber profile not found"
+            detail="Barber profile not found",
         )
 
     active_booking = get_active_booking_for_barber(
         barber.id,
-        db
+        db,
     )
 
     if not active_booking:
@@ -291,7 +328,7 @@ def get_my_bookings(
     return [
         booking_to_barber_response(
             active_booking,
-            db
+            db,
         )
     ]
 
@@ -303,7 +340,7 @@ def get_my_active_client_booking(
     db: Session = Depends(get_db),
     current_user: User = Depends(
         get_current_user
-    )
+    ),
 ):
     if role_value(current_user.role) != "client":
         raise HTTPException(
@@ -311,18 +348,18 @@ def get_my_active_client_booking(
             detail=(
                 "Only clients can view "
                 "their active booking"
-            )
+            ),
         )
 
     active_booking = get_active_booking_for_client(
         current_user.id,
-        db
+        db,
     )
 
     if not active_booking:
         raise HTTPException(
             status_code=404,
-            detail="No active booking found"
+            detail="No active booking found",
         )
 
     return active_booking
@@ -332,7 +369,7 @@ def get_my_active_client_booking(
 @router.get("/{booking_id}")
 def get_booking(
     booking_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     booking = db.query(Booking).filter(
         Booking.id == booking_id
@@ -341,12 +378,12 @@ def get_booking(
     if not booking:
         raise HTTPException(
             status_code=404,
-            detail="Booking not found"
+            detail="Booking not found",
         )
 
     expire_old_time_limited_booking(
         booking,
-        db
+        db,
     )
 
     return booking
@@ -359,12 +396,12 @@ def accept_booking(
     db: Session = Depends(get_db),
     current_user: User = Depends(
         get_current_user
-    )
+    ),
 ):
     if role_value(current_user.role) != "barber":
         raise HTTPException(
             status_code=403,
-            detail="Only barbers can accept bookings"
+            detail="Only barbers can accept bookings",
         )
 
     barber = db.query(Barber).filter(
@@ -374,12 +411,12 @@ def accept_booking(
     if not barber:
         raise HTTPException(
             status_code=404,
-            detail="Barber profile not found"
+            detail="Barber profile not found",
         )
 
     expire_old_time_limited_bookings_for_barber(
         barber.id,
-        db
+        db,
     )
 
     booking = db.query(Booking).filter(
@@ -389,19 +426,19 @@ def accept_booking(
     if not booking:
         raise HTTPException(
             status_code=404,
-            detail="Booking not found"
+            detail="Booking not found",
         )
 
     if booking.barber_id != barber.id:
         raise HTTPException(
             status_code=403,
-            detail="Not your booking"
+            detail="Not your booking",
         )
 
     if status_value(booking.status) != "pending":
         raise HTTPException(
             status_code=400,
-            detail="Invalid state"
+            detail="Invalid state",
         )
 
     now = datetime.utcnow()
@@ -412,7 +449,7 @@ def accept_booking(
     ):
         mark_booking_expired_safely(
             booking,
-            db
+            db,
         )
 
         raise HTTPException(
@@ -420,7 +457,7 @@ def accept_booking(
             detail=(
                 "Booking expired because barber "
                 "did not accept in time"
-            )
+            ),
         )
 
     other_active_booking = db.query(
@@ -430,7 +467,7 @@ def accept_booking(
         Booking.id != booking.id,
         Booking.status.in_(
             ACTIVE_BOOKING_STATUSES
-        )
+        ),
     ).first()
 
     if other_active_booking:
@@ -439,7 +476,7 @@ def accept_booking(
             detail=(
                 "You already have "
                 "an active booking."
-            )
+            ),
         )
 
     booking.status = BookingStatus.accepted
@@ -461,12 +498,12 @@ def refuse_booking(
     db: Session = Depends(get_db),
     current_user: User = Depends(
         get_current_user
-    )
+    ),
 ):
     if role_value(current_user.role) != "barber":
         raise HTTPException(
             status_code=403,
-            detail="Only barbers can refuse bookings"
+            detail="Only barbers can refuse bookings",
         )
 
     barber = db.query(Barber).filter(
@@ -476,7 +513,7 @@ def refuse_booking(
     if not barber:
         raise HTTPException(
             status_code=404,
-            detail="Barber profile not found"
+            detail="Barber profile not found",
         )
 
     booking = db.query(Booking).filter(
@@ -486,13 +523,13 @@ def refuse_booking(
     if not booking:
         raise HTTPException(
             status_code=404,
-            detail="Booking not found"
+            detail="Booking not found",
         )
 
     if booking.barber_id != barber.id:
         raise HTTPException(
             status_code=403,
-            detail="Not your booking"
+            detail="Not your booking",
         )
 
     if status_value(booking.status) != "pending":
@@ -501,7 +538,7 @@ def refuse_booking(
             detail=(
                 "Only pending bookings "
                 "can be refused"
-            )
+            ),
         )
 
     booking.status = BookingStatus.cancelled
@@ -519,32 +556,39 @@ def cancel_booking(
     db: Session = Depends(get_db),
     current_user: User = Depends(
         get_current_user
-    )
+    ),
 ):
     if role_value(current_user.role) != "client":
         raise HTTPException(
             status_code=403,
-            detail="Only clients can cancel bookings"
+            detail="Only clients can cancel bookings",
         )
 
-    booking = db.query(Booking).filter(
-        Booking.id == booking_id
-    ).populate_existing().with_for_update().first()
+    booking = (
+        db.query(Booking)
+        .filter(Booking.id == booking_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
 
     if not booking:
         raise HTTPException(
             status_code=404,
-            detail="Booking not found"
+            detail="Booking not found",
         )
 
     if booking.client_id != current_user.id:
         raise HTTPException(
             status_code=403,
-            detail="Not your booking"
+            detail="Not your booking",
         )
 
     if has_unresolved_payment(db, booking.id):
-        raise HTTPException(409, "The Square payment must be confirmed before cancellation.")
+        raise HTTPException(
+            409,
+            "The Square payment must be confirmed before cancellation.",
+        )
 
     if status_value(booking.status) != "accepted":
         raise HTTPException(
@@ -552,7 +596,7 @@ def cancel_booking(
             detail=(
                 "Only accepted bookings can "
                 "be cancelled before payment"
-            )
+            ),
         )
 
     if booking.expires_at:
@@ -561,12 +605,12 @@ def cancel_booking(
         if now > booking.expires_at:
             mark_booking_expired_safely(
                 booking,
-                db
+                db,
             )
 
             raise HTTPException(
                 status_code=400,
-                detail="Booking expired"
+                detail="Booking expired",
             )
 
     booking.status = BookingStatus.cancelled
@@ -584,12 +628,12 @@ def pay_booking(
     db: Session = Depends(get_db),
     current_user: User = Depends(
         get_current_user
-    )
+    ),
 ):
     if role_value(current_user.role) != "client":
         raise HTTPException(
             status_code=403,
-            detail="Only clients can pay"
+            detail="Only clients can pay",
         )
 
     booking = db.query(Booking).filter(
@@ -599,17 +643,18 @@ def pay_booking(
     if not booking:
         raise HTTPException(
             status_code=404,
-            detail="Booking not found"
+            detail="Booking not found",
         )
 
     if booking.client_id != current_user.id:
         raise HTTPException(
             status_code=403,
-            detail="Not your booking"
+            detail="Not your booking",
         )
 
     if status_value(booking.status) in ("paid", "completed"):
         return booking
+
     raise HTTPException(
         409,
         "Payment must be confirmed by the payment processor. Use /payments/square/pay.",
@@ -623,12 +668,12 @@ def complete_booking(
     db: Session = Depends(get_db),
     current_user: User = Depends(
         get_current_user
-    )
+    ),
 ):
     if role_value(current_user.role) != "client":
         raise HTTPException(
             status_code=403,
-            detail="Only clients can complete"
+            detail="Only clients can complete",
         )
 
     booking = db.query(Booking).filter(
@@ -638,23 +683,25 @@ def complete_booking(
     if not booking:
         raise HTTPException(
             status_code=404,
-            detail="Booking not found"
+            detail="Booking not found",
         )
 
     if booking.client_id != current_user.id:
         raise HTTPException(
             status_code=403,
-            detail="Not your booking"
+            detail="Not your booking",
         )
 
     if status_value(booking.status) != "paid":
         raise HTTPException(
             status_code=400,
-            detail="Must be paid first"
+            detail="Must be paid first",
         )
 
     booking.status = BookingStatus.completed
     booking.completed_at = datetime.utcnow()
+
+    refresh_after_completed_booking(db, booking)
 
     db.commit()
     db.refresh(booking)
@@ -670,7 +717,7 @@ def get_paid_booking_destination(
     db: Session = Depends(get_db),
     current_user: User = Depends(
         get_current_user
-    )
+    ),
 ):
     if role_value(current_user.role) != "client":
         raise HTTPException(
@@ -678,7 +725,7 @@ def get_paid_booking_destination(
             detail=(
                 "Only clients can view "
                 "the destination"
-            )
+            ),
         )
 
     booking = db.query(Booking).filter(
@@ -688,13 +735,13 @@ def get_paid_booking_destination(
     if not booking:
         raise HTTPException(
             status_code=404,
-            detail="Booking not found"
+            detail="Booking not found",
         )
 
     if booking.client_id != current_user.id:
         raise HTTPException(
             status_code=403,
-            detail="Not your booking"
+            detail="Not your booking",
         )
 
     booking_status = status_value(
@@ -703,14 +750,14 @@ def get_paid_booking_destination(
 
     if booking_status not in [
         "paid",
-        "completed"
+        "completed",
     ]:
         raise HTTPException(
             status_code=403,
             detail=(
                 "Address available "
                 "after payment"
-            )
+            ),
         )
 
     barber = db.query(Barber).filter(
@@ -720,7 +767,7 @@ def get_paid_booking_destination(
     if not barber:
         raise HTTPException(
             status_code=404,
-            detail="Barber not found"
+            detail="Barber not found",
         )
 
     if (
@@ -733,7 +780,7 @@ def get_paid_booking_destination(
             detail=(
                 "Barber destination "
                 "is not available"
-            )
+            ),
         )
 
     barber_phone = normalize_canadian_phone(
