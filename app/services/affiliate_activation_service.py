@@ -15,9 +15,14 @@ from app.models.booking import Booking, BookingStatus
 from app.models.payment_attempt import PaymentAttempt
 from app.models.payment_connection import PaymentConnection
 from app.services.affiliate_rules import evaluate_affiliate_requirements
+from app.services.affiliate_commission_service import (
+    record_completed_booking_commission,
+)
+from app.services.affiliate_settlement_service import (
+    settle_third_month_commissions,
+)
 
 
-# Los registros Sandbox no activan afiliados en producción.
 AFFILIATE_ENVIRONMENT = "production"
 
 
@@ -143,13 +148,13 @@ def refresh_affiliate_users(
     now=None,
 ):
     """
-    Actualiza los perfiles indicados.
+    Actualiza los perfiles indicados y resuelve
+    sus ingresos condicionales del tercer mes.
 
     El código que llama esta función controla
     el commit o rollback.
 
-    No contacta Square, no cambia la disponibilidad
-    del barbero y no modifica dinero.
+    No contacta Square ni realiza transferencias.
     """
     now = now or datetime.utcnow()
 
@@ -264,6 +269,12 @@ def refresh_affiliate_users(
             else:
                 attribution.status = ReferralStatus.inactive
 
+        settle_third_month_commissions(
+            db,
+            profile,
+            now=now,
+        )
+
         results[profile.user_id] = evaluation
 
     db.flush()
@@ -316,8 +327,6 @@ def refresh_after_completed_booking(
     ):
         user_ids.add(barber.user_id)
 
-    # El primer servicio de un barbero también puede
-    # activar al cliente que lo refirió.
     referrers = db.query(
         AffiliateProfile.user_id
     ).join(
@@ -335,7 +344,15 @@ def refresh_after_completed_booking(
         for row in referrers
     )
 
-    return refresh_affiliate_users(
+    evaluations = refresh_affiliate_users(
         db,
         user_ids,
     )
+
+    record_completed_booking_commission(
+        db,
+        booking,
+        evaluations,
+    )
+
+    return evaluations
