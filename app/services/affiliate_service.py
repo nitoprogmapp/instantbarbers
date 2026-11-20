@@ -17,6 +17,8 @@ CODE_CHARACTERS = (
     + string.digits
 )
 
+REFERRALS_PER_PAGE = 20
+
 
 def get_owner_type(user: User):
     if user.role == UserRole.client:
@@ -190,6 +192,7 @@ def get_referred_user_name(user: User):
 def get_referral_progress(
     db: Session,
     user: User,
+    page: int = 1,
 ):
     affiliate_profile = (
         db.query(AffiliateProfile)
@@ -202,28 +205,31 @@ def get_referral_progress(
     if affiliate_profile is None:
         return None
 
-    attributions = (
+    page = max(1, page)
+
+    base_query = (
         db.query(ReferralAttribution)
         .filter(
             ReferralAttribution.referrer_profile_id
             == affiliate_profile.id
         )
-        .order_by(ReferralAttribution.created_at.desc())
-        .all()
     )
 
-    total_referrals = len(attributions)
+    # Contar en PostgreSQL, sin cargar toda la lista.
+    total_referrals = base_query.count()
 
-    active_referrals = sum(
-        1
-        for attribution in attributions
-        if attribution.status == ReferralStatus.active
+    active_referrals = (
+        base_query.filter(
+            ReferralAttribution.status
+            == ReferralStatus.active
+        ).count()
     )
 
     inactive_referrals = (
         total_referrals - active_referrals
     )
 
+    # Compatibilidad con los Dashboards existentes.
     if total_referrals:
         active_percentage = round(
             (active_referrals / total_referrals) * 100,
@@ -231,6 +237,25 @@ def get_referral_progress(
         )
     else:
         active_percentage = 0.0
+
+    total_pages = (
+        (total_referrals + REFERRALS_PER_PAGE - 1)
+        // REFERRALS_PER_PAGE
+    )
+
+    offset = (page - 1) * REFERRALS_PER_PAGE
+
+    # Recuperar solamente los registros de esta página.
+    attributions = (
+        base_query
+        .order_by(
+            ReferralAttribution.created_at.desc(),
+            ReferralAttribution.id.desc(),
+        )
+        .offset(offset)
+        .limit(REFERRALS_PER_PAGE)
+        .all()
+    )
 
     referrals = []
 
@@ -267,4 +292,11 @@ def get_referral_progress(
             "active_percentage": active_percentage,
         },
         "referrals": referrals,
+        "pagination": {
+            "page": page,
+            "page_size": REFERRALS_PER_PAGE,
+            "total_pages": total_pages,
+            "has_previous": page > 1,
+            "has_next": page < total_pages,
+        },
     }

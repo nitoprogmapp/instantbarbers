@@ -4,6 +4,7 @@ from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
+    Query,
     Response,
 )
 from sqlalchemy.orm import Session
@@ -97,6 +98,7 @@ def get_my_affiliate_information(
 @router.get("/me/referrals")
 def get_my_referrals(
     response: Response,
+    page: int = Query(default=1, ge=1),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -111,6 +113,7 @@ def get_my_referrals(
         referral_progress = get_referral_progress(
             db=db,
             user=current_user,
+            page=page,
         )
 
         if referral_progress is None:
