@@ -386,3 +386,67 @@ def get_portal_referrals(
         raise
 
     return referral_progress
+
+
+@router.get("/portal/balance")
+def get_portal_balance(
+    response: Response,
+    current_user: User = Depends(get_portal_user),
+    db: Session = Depends(get_db),
+):
+    from sqlalchemy import func
+    from app.models.affiliate import (
+        AffiliateLedger,
+        LedgerEntryType,
+        LedgerStatus,
+    )
+
+    response.headers["Cache-Control"] = "no-store"
+
+    profile = (
+        db.query(AffiliateProfile)
+        .filter(AffiliateProfile.user_id == current_user.id)
+        .first()
+    )
+
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Affiliate profile not found",
+        )
+
+    totals = (
+        db.query(
+            AffiliateLedger.status,
+            func.sum(AffiliateLedger.amount_cents),
+        )
+        .filter(
+            AffiliateLedger.affiliate_profile_id == profile.id,
+            AffiliateLedger.entry_type == LedgerEntryType.commission,
+            AffiliateLedger.payout_id.is_(None),
+            AffiliateLedger.status.in_([
+                LedgerStatus.available,
+                LedgerStatus.pending,
+            ]),
+        )
+        .group_by(AffiliateLedger.status)
+        .all()
+    )
+
+    amounts = {
+        status.value: int(amount or 0)
+        for status, amount in totals
+    }
+
+    available = max(0, amounts.get("available", 0))
+    pending = max(0, amounts.get("pending", 0))
+    minimum = 5000
+
+    return {
+        "currency": "CAD",
+        "available_cents": available,
+        "pending_cents": pending,
+        "minimum_payout_cents": minimum,
+        "missing_cents": max(0, minimum - available),
+        "minimum_reached": available >= minimum,
+    }
