@@ -126,7 +126,8 @@ def get_current_user(
             SECRET_KEY,
             algorithms=[ALGORITHM]
         )
-
+        if payload.get("purpose") is not None:
+            raise credentials_exception
         user_id = payload.get("user_id")
 
         if user_id is None:
