@@ -450,3 +450,77 @@ def get_portal_balance(
         "missing_cents": max(0, minimum - available),
         "minimum_reached": available >= minimum,
     }
+
+@router.get("/portal/commissions")
+def get_portal_commissions(
+    response: Response,
+    page: int = Query(default=1, ge=1),
+    current_user: User = Depends(get_portal_user),
+    db: Session = Depends(get_db),
+):
+    from app.models.affiliate import (
+        AffiliateLedger,
+        LedgerEntryType,
+    )
+
+    response.headers["Cache-Control"] = "no-store"
+
+    profile = (
+        db.query(AffiliateProfile)
+        .filter(AffiliateProfile.user_id == current_user.id)
+        .first()
+    )
+
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Affiliate profile not found",
+        )
+
+    page_size = 20
+
+    query = db.query(AffiliateLedger).filter(
+        AffiliateLedger.affiliate_profile_id == profile.id,
+        AffiliateLedger.entry_type == LedgerEntryType.commission,
+    )
+
+    total = query.count()
+
+    entries = (
+        query.order_by(
+            AffiliateLedger.created_at.desc(),
+            AffiliateLedger.id.desc(),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    total_pages = max(
+        1,
+        (total + page_size - 1) // page_size,
+    )
+
+    return {
+        "currency": "CAD",
+        "commissions": [
+            {
+                "id": entry.id,
+                "amount_cents": entry.amount_cents,
+                "status": entry.status.value,
+                "created_at": (
+                    entry.created_at.isoformat() + "Z"
+                    if entry.created_at
+                    else None
+                ),
+            }
+            for entry in entries
+        ],
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "has_previous": page > 1,
+            "has_next": page < total_pages,
+        },
+    }
