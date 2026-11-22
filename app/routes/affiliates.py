@@ -524,3 +524,86 @@ def get_portal_commissions(
             "has_next": page < total_pages,
         },
     }
+
+
+
+# BLOQUE 12 — RANKING TOP 20
+
+@router.get("/portal/ranking")
+def get_portal_ranking(
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_portal_user),
+):
+    from sqlalchemy import func
+    from app.models.affiliate import ReferralAttribution
+
+    response.headers["Cache-Control"] = "no-store"
+
+    count_referrals = func.count(ReferralAttribution.id)
+
+    leaders = (
+        db.query(
+            AffiliateProfile.id.label("profile_id"),
+            AffiliateProfile.user_id.label("user_id"),
+            AffiliateProfile.owner_type.label("owner_type"),
+            count_referrals.label("total_referrals"),
+        )
+        .join(
+            ReferralAttribution,
+            ReferralAttribution.referrer_profile_id
+            == AffiliateProfile.id,
+        )
+        .group_by(
+            AffiliateProfile.id,
+            AffiliateProfile.user_id,
+            AffiliateProfile.owner_type,
+        )
+        .order_by(
+            count_referrals.desc(),
+            AffiliateProfile.id.asc(),
+        )
+        .limit(20)
+        .all()
+    )
+
+    users_by_id = {
+        user.id: user
+        for user in db.query(User)
+        .filter(
+            User.id.in_([row.user_id for row in leaders])
+        )
+        .all()
+    } if leaders else {}
+
+    ranking = []
+
+    for position, entry in enumerate(leaders, 1):
+        user = users_by_id.get(entry.user_id)
+        role = entry.owner_type.value
+
+        person = (
+            user.barber if role == "barber"
+            else user.client
+        ) if user else None
+
+        raw_name = str(
+            getattr(person, "name", "") or ""
+        ).strip()
+
+        if raw_name and "@" not in raw_name:
+            parts = raw_name.split()
+            name = parts[0]
+
+            if len(parts) > 1:
+                name += f" {parts[-1][0]}."
+        else:
+            name = f"Affiliate #{entry.profile_id}"
+
+        ranking.append({
+            "position": position,
+            "name": name,
+            "total_referrals": int(entry.total_referrals),
+        })
+
+    return {"ranking": ranking}
