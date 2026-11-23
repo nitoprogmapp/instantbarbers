@@ -142,3 +142,62 @@ If you did not request a password reset, you can ignore this email.
             smtp.starttls()
             smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
             smtp.send_message(message)
+
+
+    
+# BLOQUE 14 — CONFIRMACIÓN DE DIRECCIÓN DE CHEQUES
+
+def send_cheque_delivery_confirmation_email(
+    to_email: str,
+    confirmation_link: str,
+    language: str = "en",
+) -> None:
+    if not SMTP_USERNAME or not SMTP_PASSWORD or not EMAIL_FROM:
+        raise RuntimeError("SMTP variables are not configured")
+
+    is_french = str(language).lower().startswith("fr")
+
+    message = EmailMessage()
+    message["From"] = f"InstantBarbers <{EMAIL_FROM}>"
+    message["To"] = to_email
+
+    if is_french:
+        message["Subject"] = (
+            "InstantBarbers - Confirmez votre adresse de paiement"
+        )
+        message.set_content(
+            "Une demande de modification de votre adresse "
+            "de paiement par chèque a été reçue.\n\n"
+            "Confirmez cette demande avec le lien suivant :\n\n"
+            f"{confirmation_link}\n\n"
+            "Si vous n'avez pas demandé cette modification, "
+            "n'ouvrez pas le lien et contactez InstantBarbers.\n\n"
+            "Ne partagez jamais ce lien."
+        )
+    else:
+        message["Subject"] = (
+            "InstantBarbers - Confirm your payment address"
+        )
+        message.set_content(
+            "We received a request to change your "
+            "cheque delivery address.\n\n"
+            "Confirm this request using the following link:\n\n"
+            f"{confirmation_link}\n\n"
+            "If you did not request this change, "
+            "do not open the link and contact InstantBarbers.\n\n"
+            "Never share this link."
+        )
+
+    if SMTP_USE_SSL:
+        with smtplib.SMTP_SSL(
+            SMTP_HOST, SMTP_PORT, timeout=20
+        ) as smtp:
+            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.send_message(message)
+    else:
+        with smtplib.SMTP(
+            SMTP_HOST, SMTP_PORT, timeout=20
+        ) as smtp:
+            smtp.starttls()
+            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.send_message(message)
