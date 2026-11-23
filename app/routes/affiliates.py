@@ -607,3 +607,17 @@ def get_portal_ranking(
         })
 
     return {"ranking": ranking}
+
+# ACCESO AL RANKING GLOBAL DESDE LOS DASHBOARDS
+
+@router.get("/ranking")
+def get_global_ranking(
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return get_portal_ranking(
+        response=response,
+        db=db,
+        current_user=current_user,
+    )
