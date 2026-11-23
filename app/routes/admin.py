@@ -88,6 +88,59 @@ input{width:100%;padding:13px 14px;border-radius:10px;border:1px solid #27415f;b
 <div class="card"><div class="label">Activated</div><div id="clientsActivated" class="value">—</div></div>
 <div class="card"><div class="label">Haircuts Today</div><div id="haircutsToday" class="value">—</div></div>
 </section>
+
+<div class="section-title">AFFILIATES</div>
+
+<section class="grid">
+  <div class="card">
+    <div class="label">Registered Affiliates</div>
+    <div id="affiliatesRegistered" class="value">—</div>
+  </div>
+
+  <div class="card">
+    <div class="label">Total Referrals</div>
+    <div id="affiliatesReferrals" class="value">—</div>
+  </div>
+</section>
+
+<div class="section-title">AFFILIATE DETAILS</div>
+
+<div style="overflow-x:auto">
+  <table style="width:100%;border-collapse:collapse;text-align:left">
+    <thead>
+      <tr>
+        <th>Affiliate</th>
+        <th>Role</th>
+        <th>Status</th>
+        <th>Referrals</th>
+        <th>Active</th>
+        <th>Earned</th>
+        <th>Available</th>
+        <th>Pending</th>
+      </tr>
+    </thead>
+    <tbody id="affiliatesTableBody">
+      <tr>
+        <td colspan="8">Loading affiliate data...</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:20px">
+  <button id="affiliatesPrevious" class="logout" type="button">
+    Previous
+  </button>
+
+  <span id="affiliatesPage">Page 1 of 1</span>
+
+  <button id="affiliatesNext" class="logout" type="button">
+    Next
+  </button>
+</div>
+
+<div id="affiliatesStatus" class="status" role="status"></div>
+ 
 <div id="status" class="status"></div>
 </main>
 
@@ -128,6 +181,127 @@ async function loadMetrics(){
     statusText.textContent="Unable to refresh dashboard.";
   }
 }
+
+let affiliatesCurrentPage = 1;
+let affiliatesTotalPages = 1;
+
+async function loadAffiliates(page = 1) {
+  const token = sessionStorage.getItem(TOKEN_KEY);
+  if (!token) return;
+
+  const status = document.getElementById("affiliatesStatus");
+  const tbody = document.getElementById("affiliatesTableBody");
+  const previous = document.getElementById("affiliatesPrevious");
+  const next = document.getElementById("affiliatesNext");
+
+  status.textContent = "Loading affiliates...";
+
+  try {
+    const response = await fetch(
+      `/admin/affiliates/overview?page=${page}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json"
+        },
+        cache: "no-store"
+      }
+    );
+
+    if (response.status === 401 || response.status === 403) {
+      showLogin("Admin access required.");
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error("Unable to load affiliate information.");
+    }
+
+    const data = await response.json();
+
+    if (!Array.isArray(data.affiliates)) {
+      throw new Error("Invalid affiliate data.");
+    }
+
+    affiliatesCurrentPage = data.pagination.page;
+    affiliatesTotalPages = data.pagination.total_pages;
+
+    document.getElementById("affiliatesRegistered").textContent =
+      data.summary.total_affiliates;
+
+    document.getElementById("affiliatesReferrals").textContent =
+      data.summary.total_referrals;
+
+    tbody.replaceChildren();
+
+    const money = (cents) =>
+      new Intl.NumberFormat("en-CA", {
+        style: "currency",
+        currency: "CAD"
+      }).format((Number(cents) || 0) / 100);
+
+    if (data.affiliates.length === 0) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = 8;
+      cell.textContent = "No affiliates found.";
+      cell.style.padding = "16px";
+      row.appendChild(cell);
+      tbody.appendChild(row);
+    }
+
+    data.affiliates.forEach((affiliate) => {
+      const row = document.createElement("tr");
+
+      const values = [
+        affiliate.name,
+        affiliate.role,
+        affiliate.status,
+        affiliate.total_referrals,
+        affiliate.active_referrals,
+        money(affiliate.commission_earned_cents),
+        money(affiliate.available_cents),
+        money(affiliate.pending_cents)
+      ];
+
+      values.forEach((value) => {
+        const cell = document.createElement("td");
+        cell.textContent = String(value ?? "—");
+        cell.style.padding = "12px 8px";
+        cell.style.borderBottom = "1px solid #27415f";
+        row.appendChild(cell);
+      });
+
+      tbody.appendChild(row);
+    });
+
+    document.getElementById("affiliatesPage").textContent =
+      `Page ${affiliatesCurrentPage} of ${affiliatesTotalPages}`;
+
+    previous.disabled = affiliatesCurrentPage <= 1;
+    next.disabled = affiliatesCurrentPage >= affiliatesTotalPages;
+
+    status.textContent = "Affiliate information updated.";
+
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+document.getElementById("affiliatesPrevious")
+  .addEventListener("click", () => {
+    if (affiliatesCurrentPage > 1) {
+      loadAffiliates(affiliatesCurrentPage - 1);
+    }
+  });
+
+document.getElementById("affiliatesNext")
+  .addEventListener("click", () => {
+    if (affiliatesCurrentPage < affiliatesTotalPages) {
+      loadAffiliates(affiliatesCurrentPage + 1);
+    }
+  });
+
 loginForm.addEventListener("submit",async(event)=>{
   event.preventDefault();
   loginError.textContent="";
@@ -141,12 +315,16 @@ loginForm.addEventListener("submit",async(event)=>{
     sessionStorage.setItem(TOKEN_KEY,data.access_token);
     document.getElementById("password").value="";
     await loadMetrics();
+    
+await loadAffiliates(1);
+
   }catch(error){
     loginError.textContent=error.message||"Login failed";
   }
 });
 logoutButton.addEventListener("click",()=>showLogin());
 loadMetrics();
+loadAffiliates(1);
 setInterval(loadMetrics,5000);
 </script>
 </body>
@@ -248,5 +426,225 @@ def get_admin_metrics(
         },
         "haircuts": {
             "completed_today": haircuts_today,
+        },
+    }
+
+
+
+# BLOQUE 13 — CONSULTA ADMINISTRATIVA DE AFILIADOS
+
+@router.get("/affiliates/overview")
+def get_admin_affiliates_overview(
+    page: int = 1,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from sqlalchemy import case
+    from app.models.affiliate import (
+        AffiliateProfile,
+        ReferralAttribution,
+        ReferralStatus,
+        AffiliateLedger,
+        LedgerEntryType,
+        LedgerStatus,
+    )
+
+    ensure_user_is_admin(current_user)
+
+    if page < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Page must be at least 1",
+        )
+
+    per_page = 20
+
+    total_affiliates = (
+        db.query(func.count(AffiliateProfile.id)).scalar()
+        or 0
+    )
+
+    total_referrals = (
+        db.query(func.count(ReferralAttribution.id)).scalar()
+        or 0
+    )
+
+    profiles = (
+        db.query(AffiliateProfile)
+        .order_by(AffiliateProfile.id.asc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
+
+    profile_ids = [profile.id for profile in profiles]
+    user_ids = [profile.user_id for profile in profiles]
+
+    users = {
+        user.id: user
+        for user in db.query(User)
+        .filter(User.id.in_(user_ids))
+        .all()
+    } if user_ids else {}
+
+    referral_counts = {}
+
+    if profile_ids:
+        rows = (
+            db.query(
+                ReferralAttribution.referrer_profile_id,
+                func.count(ReferralAttribution.id),
+                func.sum(
+                    case(
+                        (
+                            ReferralAttribution.status
+                            == ReferralStatus.active,
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+            )
+            .filter(
+                ReferralAttribution.referrer_profile_id.in_(
+                    profile_ids
+                )
+            )
+            .group_by(
+                ReferralAttribution.referrer_profile_id
+            )
+            .all()
+        )
+
+        referral_counts = {
+            row[0]: (
+                int(row[1] or 0),
+                int(row[2] or 0),
+            )
+            for row in rows
+        }
+
+    commission_counts = {}
+
+    if profile_ids:
+        rows = (
+            db.query(
+                AffiliateLedger.affiliate_profile_id,
+                func.sum(
+                    case(
+                        (
+                            AffiliateLedger.status.in_([
+                                LedgerStatus.pending,
+                                LedgerStatus.available,
+                                LedgerStatus.paid,
+                            ]),
+                            AffiliateLedger.amount_cents,
+                        ),
+                        else_=0,
+                    )
+                ),
+                func.sum(
+                    case(
+                        (
+                            (
+                                AffiliateLedger.status
+                                == LedgerStatus.available
+                            )
+                            & AffiliateLedger.payout_id.is_(None),
+                            AffiliateLedger.amount_cents,
+                        ),
+                        else_=0,
+                    )
+                ),
+                func.sum(
+                    case(
+                        (
+                            (
+                                AffiliateLedger.status
+                                == LedgerStatus.pending
+                            )
+                            & AffiliateLedger.payout_id.is_(None),
+                            AffiliateLedger.amount_cents,
+                        ),
+                        else_=0,
+                    )
+                ),
+            )
+            .filter(
+                AffiliateLedger.affiliate_profile_id.in_(
+                    profile_ids
+                ),
+                AffiliateLedger.entry_type
+                == LedgerEntryType.commission,
+            )
+            .group_by(AffiliateLedger.affiliate_profile_id)
+            .all()
+        )
+
+        commission_counts = {
+            row[0]: (
+                int(row[1] or 0),
+                int(row[2] or 0),
+                int(row[3] or 0),
+            )
+            for row in rows
+        }
+
+    affiliates = []
+
+    for profile in profiles:
+        user = users.get(profile.user_id)
+        role = profile.owner_type.value
+
+        person = (
+            user.barber if role == "barber"
+            else user.client
+        ) if user else None
+
+        name = str(
+            getattr(person, "name", "") or ""
+        ).strip()
+
+        if not name:
+            name = user.email if user else "Unknown"
+
+        total, active = referral_counts.get(
+            profile.id,
+            (0, 0),
+        )
+
+        earned, available, pending = (
+            commission_counts.get(
+                profile.id,
+                (0, 0, 0),
+            )
+        )
+
+        affiliates.append({
+            "id": profile.id,
+            "name": name,
+            "role": role,
+            "status": profile.status.value,
+            "total_referrals": total,
+            "active_referrals": active,
+            "commission_earned_cents": earned,
+            "available_cents": available,
+            "pending_cents": pending,
+        })
+
+    return {
+        "summary": {
+            "total_affiliates": int(total_affiliates),
+            "total_referrals": int(total_referrals),
+        },
+        "affiliates": affiliates,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total_pages": max(
+                1,
+                (total_affiliates + per_page - 1)
+                // per_page,
+            ),
         },
     }
