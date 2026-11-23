@@ -424,3 +424,47 @@ class AffiliateChequeDelivery(Base):
         onupdate=datetime.utcnow,
         nullable=False,
     )
+
+
+
+# BLOQUE 14 — DIRECCIÓN PENDIENTE DE CONFIRMACIÓN
+
+class AffiliateChequeDeliveryPending(Base):
+    __tablename__ = "affiliate_cheque_delivery_pending"
+
+    id = Column(Integer, primary_key=True)
+
+    affiliate_profile_id = Column(
+        Integer,
+        ForeignKey("affiliate_profiles.id"),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    legal_name = Column(String(150), nullable=False)
+
+    address_line_1 = Column(String(200), nullable=False)
+    address_line_2 = Column(String(200), nullable=True)
+
+    city = Column(String(100), nullable=False)
+    state_province = Column(String(100), nullable=True)
+    postal_code = Column(String(30), nullable=True)
+    country_code = Column(String(2), nullable=False)
+
+    phone = Column(String(30), nullable=True)
+
+    token_hash = Column(
+        String(64),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    expires_at = Column(DateTime, nullable=False)
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
