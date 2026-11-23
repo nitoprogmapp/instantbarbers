@@ -621,3 +621,176 @@ def get_global_ranking(
         db=db,
         current_user=current_user,
     )
+
+
+
+# BLOQUE 14 — CONSULTAR DIRECCIÓN DE CHEQUES
+
+@router.get("/portal/cheque-delivery")
+def get_my_cheque_delivery(
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_portal_user),
+):
+    from app.models.affiliate import AffiliateChequeDelivery
+
+    response.headers["Cache-Control"] = "no-store"
+
+    profile = (
+        db.query(AffiliateProfile)
+        .filter(AffiliateProfile.user_id == current_user.id)
+        .first()
+    )
+
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Affiliate profile not found",
+        )
+
+    delivery = (
+        db.query(AffiliateChequeDelivery)
+        .filter(
+            AffiliateChequeDelivery.affiliate_profile_id
+            == profile.id
+        )
+        .first()
+    )
+
+    if delivery is None:
+        return {
+            "configured": False,
+            "details": None,
+        }
+
+    return {
+        "configured": True,
+        "details": {
+            "legal_name": delivery.legal_name,
+            "address_line_1": delivery.address_line_1,
+            "address_line_2": delivery.address_line_2,
+            "city": delivery.city,
+            "state_province": delivery.state_province,
+            "postal_code": delivery.postal_code,
+            "country_code": delivery.country_code,
+            "phone": delivery.phone,
+        },
+    }
+
+
+
+# BLOQUE 14 — VALIDACIÓN DE DATOS POSTALES
+
+from pydantic import BaseModel, Field
+
+
+class ChequeDeliveryInput(BaseModel):
+    legal_name: str = Field(min_length=2, max_length=150)
+
+    address_line_1: str = Field(min_length=3, max_length=200)
+    address_line_2: str | None = Field(default=None, max_length=200)
+
+    city: str = Field(min_length=2, max_length=100)
+    state_province: str | None = Field(default=None, max_length=100)
+
+    postal_code: str | None = Field(default=None, max_length=30)
+    country_code: str = Field(pattern=r"^[A-Z]{2}$")
+
+    phone: str | None = Field(default=None, max_length=30)
+
+    password: str = Field(min_length=1, max_length=128)
+
+
+
+# BLOQUE 14 — GUARDAR DIRECCIÓN DE CHEQUES
+
+@router.put("/portal/cheque-delivery")
+def save_my_cheque_delivery(
+    data: ChequeDeliveryInput,
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_portal_user),
+):
+    from app.models.affiliate import AffiliateChequeDelivery
+    from app.routes.auth import verify_password
+
+    response.headers["Cache-Control"] = "no-store"
+
+    # Confirmar la identidad antes de modificar datos de cobro.
+    if not verify_password(
+        data.password,
+        current_user.password_hash,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Incorrect password",
+        )
+
+    profile = (
+        db.query(AffiliateProfile)
+        .filter(AffiliateProfile.user_id == current_user.id)
+        .first()
+    )
+
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Affiliate profile not found",
+        )
+
+    legal_name = data.legal_name.strip()
+    address_line_1 = data.address_line_1.strip()
+    city = data.city.strip()
+
+    if not legal_name or not address_line_1 or not city:
+        raise HTTPException(
+            status_code=422,
+            detail="Required address fields cannot be empty",
+        )
+
+    delivery = (
+        db.query(AffiliateChequeDelivery)
+        .filter(
+            AffiliateChequeDelivery.affiliate_profile_id
+            == profile.id
+        )
+        .first()
+    )
+
+    if delivery is None:
+        delivery = AffiliateChequeDelivery(
+            affiliate_profile_id=profile.id
+        )
+        db.add(delivery)
+
+    delivery.legal_name = legal_name
+    delivery.address_line_1 = address_line_1
+    delivery.address_line_2 = (
+        data.address_line_2.strip()
+        if data.address_line_2 else None
+    )
+    delivery.city = city
+    delivery.state_province = (
+        data.state_province.strip()
+        if data.state_province else None
+    )
+    delivery.postal_code = (
+        data.postal_code.strip()
+        if data.postal_code else None
+    )
+    delivery.country_code = data.country_code
+    delivery.phone = (
+        data.phone.strip()
+        if data.phone else None
+    )
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "saved": True,
+        "message": "Cheque delivery information saved",
+    }
